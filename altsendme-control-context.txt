@@ -1,0 +1,196 @@
+engine/native/src/pairing_host.rs
+engine/native/src/node.rs
+engine/native/src/identity_store.rs
+engine/native/src/import.rs
+engine/native/src/runtime.rs
+engine/native/src/export.rs
+engine/native/src/history.rs
+engine/native/src/nearby.rs
+engine/native/src/secret_store.rs
+engine/native/src/types.rs
+engine/native/src/lan_discovery.rs
+engine/native/src/lib.rs
+engine/native/src/pairing_util.rs
+engine/native/src/device_identity.rs
+engine/native/src/storage.rs
+engine/native/src/rate_limit.rs
+engine/native/src/send.rs
+engine/native/src/receive.rs
+engine/native/src/paired_connections.rs
+engine/native/src/pairing_host.rs:14:    write_message, ControlMessage, PairedDevice, PairingStatus, RememberVote, CONTROL_ALPN,
+engine/native/src/pairing_host.rs:98:        let conn = match endpoint.connect(addr, CONTROL_ALPN).await {
+engine/native/src/pairing_host.rs:110:        let info = ControlMessage::PairingInfo {
+engine/native/src/pairing_host.rs:121:        let vote = ControlMessage::RememberVote {
+engine/native/src/pairing_host.rs:137:        let ControlMessage::PairingInfo {
+engine/native/src/node.rs:19:    verify_challenge, write_message, AddrInfoOptions, AppHandle, ControlMessage, Discoverability,
+engine/native/src/node.rs:20:    DiscoveryModeOption, InviteResponse, PairedDevice, PairingStatus, RememberVote,
+engine/native/src/node.rs:21:    CONTROL_ALPN, PRESENCE_CONNECT_TIMEOUT_SECS,
+engine/native/src/node.rs:32:use crate::paired_connections::{invite_wait_timeout, PairedConnectionManager};
+engine/native/src/node.rs:79:        if conn.alpn() != CONTROL_ALPN {
+engine/native/src/node.rs:104:        // endpoint id could pop invite dialogs over the relay. Paired peers
+engine/native/src/node.rs:128:    /// Nearby invites sent and not yet answered. An unpaired peer's
+engine/native/src/node.rs:129:    /// `InviteResponse` is only honoured if it's in here, so a stranger can't
+engine/native/src/node.rs:130:    /// spoof an acceptance for an invite we never sent.
+engine/native/src/node.rs:131:    pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
+engine/native/src/node.rs:140:/// Identity snapshot taken when we invite a nearby peer — the Nearby entry may
+engine/native/src/node.rs:143:struct PendingNearbyInvite {
+engine/native/src/node.rs:173:            // unpaired message set (identity probes, unpaired invites).
+engine/native/src/node.rs:189:        let our_info = ControlMessage::PairingInfo {
+engine/native/src/node.rs:200:        let mut remote_info: Option<ControlMessage> = None;
+engine/native/src/node.rs:203:        let mut invite_received = false;
+engine/native/src/node.rs:214:                ControlMessage::PairingInfo {
+engine/native/src/node.rs:230:                    remote_info = Some(ControlMessage::PairingInfo {
+engine/native/src/node.rs:238:                ControlMessage::RememberVote { vote, .. } => {
+engine/native/src/node.rs:241:                ControlMessage::Invite {
+engine/native/src/node.rs:242:                    blob_ticket,
+engine/native/src/node.rs:254:                    invite_received = true;
+engine/native/src/node.rs:256:                        "blob_ticket": blob_ticket,
+engine/native/src/node.rs:264:                            "paired-invite-received",
+engine/native/src/node.rs:269:                ControlMessage::InviteResponse { response, .. } => {
+engine/native/src/node.rs:271:                        InviteResponse::Accepted => "accepted",
+engine/native/src/node.rs:272:                        InviteResponse::Declined => "declined",
+engine/native/src/node.rs:274:                    debug!(?response, "invite response from {remote}");
+engine/native/src/node.rs:275:                    crate::pairing_util::emit_paired_invite_response(
+engine/native/src/node.rs:283:                ControlMessage::Recognition { signature } => {
+engine/native/src/node.rs:297:                ControlMessage::Forget { signature } => {
+engine/native/src/node.rs:334:                ControlMessage::WhoAreYou
+engine/native/src/node.rs:335:                | ControlMessage::Identity { .. }
+engine/native/src/node.rs:336:                | ControlMessage::PairRequest { .. } => {
+engine/native/src/node.rs:343:                if let Some(ControlMessage::PairingInfo {
+engine/native/src/node.rs:381:            let vote = ControlMessage::RememberVote {
+engine/native/src/node.rs:406:        } else if invite_received {
+engine/native/src/node.rs:422:    /// only probe identity or send an unpaired invite.
+engine/native/src/node.rs:477:            // probe/invite loop. Paired peers are never charged.
+engine/native/src/node.rs:492:            if let ControlMessage::WhoAreYou = msg {
+engine/native/src/node.rs:503:                let reply = ControlMessage::Identity {
+engine/native/src/node.rs:548:        msg: ControlMessage,
+engine/native/src/node.rs:552:            ControlMessage::Invite {
+engine/native/src/node.rs:553:                blob_ticket,
+engine/native/src/node.rs:559:                crate::pairing_util::emit_paired_invite_received(
+engine/native/src/node.rs:562:                    &blob_ticket,
+engine/native/src/node.rs:568:            ControlMessage::PairRequest {
+engine/native/src/node.rs:581:            ControlMessage::InviteResponse { response, .. } => {
+engine/native/src/node.rs:582:                // An unpaired peer could claim to be answering an invite we
+engine/native/src/node.rs:583:                // never sent, so match it against `pending_nearby_invites`.
+engine/native/src/node.rs:586:                let mut invited_name = None;
+engine/native/src/node.rs:590:                        .pending_nearby_invites
+engine/native/src/node.rs:596:                            "ignoring InviteResponse from unpaired {remote} with no outstanding nearby invite"
+engine/native/src/node.rs:600:                    invited_name = Some(pending.display_name.clone());
+engine/native/src/node.rs:601:                    // Mirrors `accept_nearby_invite` on the receiver's side;
+engine/native/src/node.rs:604:                    if matches!(response, InviteResponse::Accepted) {
+engine/native/src/node.rs:610:                    InviteResponse::Accepted => "accepted",
+engine/native/src/node.rs:611:                    InviteResponse::Declined => "declined",
+engine/native/src/node.rs:614:                crate::pairing_util::emit_paired_invite_response(
+engine/native/src/node.rs:619:                    invited_name,
+engine/native/src/node.rs:622:            ControlMessage::Recognition { signature } => {
+engine/native/src/node.rs:640:            ControlMessage::Forget { signature } => {
+engine/native/src/node.rs:685:    /// entry, refresh and `device-paired` event `accept_nearby_invite` gives
+engine/native/src/node.rs:688:    async fn commit_nearby_pairing(&self, remote: &EndpointId, pending: PendingNearbyInvite) {
+engine/native/src/node.rs:795:    /// Peers declined-and-blocked from a nearby invite. Checked in
+engine/native/src/node.rs:798:    /// Same map as `ControlCtx::pending_nearby_invites`, shared with it.
+engine/native/src/node.rs:799:    pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
+engine/native/src/node.rs:852:        let pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>> =
+engine/native/src/node.rs:873:            pending_nearby_invites.clone(),
+engine/native/src/node.rs:928:            pending_nearby_invites,
+engine/native/src/node.rs:1003:            self.pending_nearby_invites.clone(),
+engine/native/src/node.rs:1175:    pub async fn invite_paired_device(
+engine/native/src/node.rs:1178:        blob_ticket: &str,
+engine/native/src/node.rs:1184:            target: "dashbeam::_events::pairing::invite_sent",
+engine/native/src/node.rs:1198:        self.deliver_invite(remote_endpoint_id, blob_ticket, file_count, total_size, true)
+engine/native/src/node.rs:1203:    /// `Invite` a paired device gets, but the receiver's UI shows the sender's
+engine/native/src/node.rs:1205:    pub async fn invite_nearby_device(
+engine/native/src/node.rs:1208:        blob_ticket: &str,
+engine/native/src/node.rs:1220:        anyhow::ensure!(!blob_ticket.is_empty(), "no blob ticket provided");
+engine/native/src/node.rs:1224:            .deliver_invite(endpoint_id, blob_ticket, file_count, total_size, false)
+engine/native/src/node.rs:1230:        // Track the invite so the peer's `InviteResponse` is recognized as a
+engine/native/src/node.rs:1234:            Some(d) => PendingNearbyInvite {
+engine/native/src/node.rs:1243:            None => PendingNearbyInvite {
+engine/native/src/node.rs:1249:        self.pending_nearby_invites
+engine/native/src/node.rs:1259:    /// [`Self::accept_nearby_invite`] + `InviteResponse` mutual pairing.
+engine/native/src/node.rs:1276:            Some(d) => PendingNearbyInvite {
+engine/native/src/node.rs:1285:            None => PendingNearbyInvite {
+engine/native/src/node.rs:1291:        self.pending_nearby_invites
+engine/native/src/node.rs:1299:    /// Delivers a single `Invite` to `remote_endpoint_id`. Shared by the paired
+engine/native/src/node.rs:1300:    /// and nearby invite paths — only their preconditions differ.
+engine/native/src/node.rs:1302:    async fn deliver_invite(
+engine/native/src/node.rs:1305:        blob_ticket: &str,
+engine/native/src/node.rs:1318:                .wait_for_connection(remote_endpoint_id, invite_wait_timeout())
+engine/native/src/node.rs:1339:                    endpoint.connect(addr, CONTROL_ALPN),
+engine/native/src/node.rs:1370:                return Err(err).context("open bi stream for invite");
+engine/native/src/node.rs:1374:        let invite = ControlMessage::Invite {
+engine/native/src/node.rs:1375:            blob_ticket: blob_ticket.to_string(),
+engine/native/src/node.rs:1380:        if let Err(err) = write_message(&mut send, &invite).await {
+engine/native/src/node.rs:1382:            return Err(err).context("write Invite message");
+engine/native/src/node.rs:1386:        // the invite, without blocking the caller.
+engine/native/src/node.rs:1392:                // Expected while the receiver downloads; the invite landed.
+engine/native/src/node.rs:1410:            endpoint.connect(addr, CONTROL_ALPN),
+engine/native/src/node.rs:1426:        let request = ControlMessage::PairRequest {
+engine/native/src/node.rs:1446:    pub async fn respond_paired_invite(
+engine/native/src/node.rs:1453:            target: "dashbeam::_events::pairing::invite_response",
+engine/native/src/node.rs:1465:        self.deliver_invite_response(remote_endpoint_id, accepted, true)
+engine/native/src/node.rs:1471:    /// [`Self::deliver_invite_response`].
+engine/native/src/node.rs:1472:    pub async fn accept_nearby_invite(&self, endpoint_id: &str) -> anyhow::Result<()> {
+engine/native/src/node.rs:1502:        if let Err(err) = self.deliver_invite_response(endpoint_id, true, false).await {
+engine/native/src/node.rs:1504:                "accepted nearby invite from {endpoint_id} but could not notify the sender: {err:#}"
+engine/native/src/node.rs:1517:    pub async fn decline_nearby_invite(
+engine/native/src/node.rs:1526:        self.deliver_invite_response(endpoint_id, false, false)
+engine/native/src/node.rs:1530:    /// Connects to `remote_endpoint_id` and delivers an `InviteResponse`.
+engine/native/src/node.rs:1531:    /// Shared by [`Self::respond_paired_invite`], [`Self::accept_nearby_invite`],
+engine/native/src/node.rs:1532:    /// and [`Self::decline_nearby_invite`] — see [`Self::deliver_invite`] for
+engine/native/src/node.rs:1534:    async fn deliver_invite_response(
+engine/native/src/node.rs:1542:            InviteResponse::Accepted
+engine/native/src/node.rs:1544:            InviteResponse::Declined
+engine/native/src/node.rs:1554:                .wait_for_connection(remote_endpoint_id, invite_wait_timeout())
+engine/native/src/node.rs:1574:                    endpoint.connect(addr, CONTROL_ALPN),
+engine/native/src/node.rs:1580:                        return Err(err).context("invite response connect failed");
+engine/native/src/node.rs:1582:                    Err(_) => anyhow::bail!("invite response connect timeout"),
+engine/native/src/node.rs:1590:            .context("open bi stream for invite response")?;
+engine/native/src/node.rs:1591:        let message = ControlMessage::InviteResponse {
+engine/native/src/node.rs:1597:            .context("write InviteResponse message")?;
+engine/native/src/node.rs:1791:            endpoint.connect(addr, CONTROL_ALPN),
+engine/native/src/node.rs:1798:        write_message(&mut send, &ControlMessage::WhoAreYou).await?;
+engine/native/src/node.rs:1806:            ControlMessage::Identity { .. } => Ok(conn),
+engine/native/src/node.rs:1818:        let recognition = ControlMessage::Recognition {
+engine/native/src/node.rs:1826:    /// Dial a peer's control ALPN and ask who it is. Used for devices found on
+engine/native/src/node.rs:2047:/// Dial a peer's control ALPN and ask who it is. Shared by
+engine/native/src/node.rs:2060:        endpoint.connect(remote, CONTROL_ALPN),
+engine/native/src/node.rs:2066:    write_message(&mut send, &ControlMessage::WhoAreYou).await?;
+engine/native/src/node.rs:2071:        ControlMessage::Identity {
+engine/native/src/node.rs:2126:        endpoint.connect(addr, CONTROL_ALPN),
+engine/native/src/node.rs:2153:    let forget = ControlMessage::Forget {
+engine/native/src/node.rs:2181:    pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
+engine/native/src/node.rs:2230:        .alpns(vec![CONTROL_ALPN.to_vec()])
+engine/native/src/node.rs:2248:            pending_nearby_invites,
+engine/native/src/node.rs:2255:        .accept(CONTROL_ALPN, control)
+engine/native/src/pairing_util.rs:30:/// Emit `paired-invite-received` to the frontend (shared by inbound and outbound readers).
+engine/native/src/pairing_util.rs:31:pub fn emit_paired_invite_received(
+engine/native/src/pairing_util.rs:34:    blob_ticket: &str,
+engine/native/src/pairing_util.rs:40:        "blob_ticket": blob_ticket,
+engine/native/src/pairing_util.rs:50:    let _ = handle.emit_event_with_payload("paired-invite-received", &payload.to_string());
+engine/native/src/pairing_util.rs:86:/// Emit `paired-invite-response` so the sender UI can toast accept/decline.
+engine/native/src/pairing_util.rs:90:pub fn emit_paired_invite_response(
+engine/native/src/pairing_util.rs:112:    let _ = handle.emit_event_with_payload("paired-invite-response", &payload.to_string());
+engine/native/src/send.rs:4:    run_share_session, AppHandle, DiscoveryModeOption, FileMetadata, SendOptions, METADATA_ALPN,
+engine/native/src/send.rs:51:        .alpns(vec![iroh_blobs::ALPN.to_vec(), METADATA_ALPN.to_vec()])
+engine/native/src/receive.rs:38:            .alpns(vec![])
+engine/native/src/paired_connections.rs:12:    write_message, ControlMessage, InviteResponse, PairedDevice, CONTROL_ALPN,
+engine/native/src/paired_connections.rs:13:    PAIRED_INVITE_WAIT_SECS, PAIRED_RECONNECT_MAX_SECS, PAIRED_RECONNECT_MIN_SECS,
+engine/native/src/paired_connections.rs:22:    build_control_connect_addr, emit_paired_invite_received,
+engine/native/src/paired_connections.rs:23:    emit_paired_invite_response, set_presence,
+engine/native/src/paired_connections.rs:247:        // outbound) — the inbound is still served for invites, and replacing
+engine/native/src/paired_connections.rs:325:                    // Read invites on the outbound (client) connection. The peer opens
+engine/native/src/paired_connections.rs:404:            endpoint.connect(addr, CONTROL_ALPN),
+engine/native/src/paired_connections.rs:416:        let recognition = ControlMessage::Recognition {
+engine/native/src/paired_connections.rs:426:    /// Accept bi streams on an outbound (client) control connection and handle invites.
+engine/native/src/paired_connections.rs:456:                ControlMessage::Invite {
+engine/native/src/paired_connections.rs:457:                    blob_ticket,
+engine/native/src/paired_connections.rs:463:                    emit_paired_invite_received(
+engine/native/src/paired_connections.rs:466:                        &blob_ticket,
+engine/native/src/paired_connections.rs:472:                ControlMessage::InviteResponse { response, .. } => {
+engine/native/src/paired_connections.rs:474:                        InviteResponse::Accepted => "accepted",
+engine/native/src/paired_connections.rs:475:                        InviteResponse::Declined => "declined",
+engine/native/src/paired_connections.rs:480:                    emit_paired_invite_response(
+engine/native/src/paired_connections.rs:488:                ControlMessage::Recognition { signature } => {
+engine/native/src/paired_connections.rs:502:                ControlMessage::Forget { signature } => {
+engine/native/src/paired_connections.rs:669:pub fn invite_wait_timeout() -> Duration {
+engine/native/src/paired_connections.rs:670:    Duration::from_secs(PAIRED_INVITE_WAIT_SECS)
