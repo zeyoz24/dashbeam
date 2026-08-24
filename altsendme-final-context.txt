@@ -1,0 +1,1183 @@
+=== CONTROL ENUM ===
+=== CONTROL HANDLER ===
+221-                    let Ok(peer_id) = EndpointId::from_str(&endpoint_id) else {
+222-
+223-                        continue;
+224-                    };
+225-                    if !verify_challenge(&peer_id, &keying, &signature) {
+226-
+227-                        continue;
+228-                    }
+229-
+230-                    remote_info = Some(ControlMessage::PairingInfo {
+231-                        endpoint_id,
+232-                        display_name,
+233-                        device_type,
+234-                        os,
+235-                        signature,
+236-                    });
+237-                }
+238-                ControlMessage::RememberVote { vote, .. } => {
+239-                    remote_vote = Some(vote);
+240-                }
+241:                ControlMessage::Invite {
+242-                    blob_ticket,
+243-                    file_count,
+244-                    total_size,
+245-                    sender_name,
+246-                } => {
+247-                    let allowed = self.is_allowed(&remote).await;
+248-
+249-
+250-                    if !allowed {
+251-
+252-                        continue;
+253-                    }
+254-                    invite_received = true;
+255-                    let payload = serde_json::json!({
+256-                        "blob_ticket": blob_ticket,
+257-                        "file_count": file_count,
+258-                        "total_size": total_size,
+259-                        "sender_name": sender_name,
+260-                        "remote_endpoint_id": remote.to_string(),
+261-                    });
+262-                    if let Some(handle) = &self.ctx.app_handle {
+263-                        let _ = handle.emit_event_with_payload(
+264-                            "paired-invite-received",
+265-                            &payload.to_string(),
+266-                        );
+267-                    }
+268-                }
+269-                ControlMessage::InviteResponse { response, .. } => {
+270-                    let response_str = match response {
+271-                        InviteResponse::Accepted => "accepted",
+272-                        InviteResponse::Declined => "declined",
+273-                    };
+274-                    debug!(?response, "invite response from {remote}");
+275-                    crate::pairing_util::emit_paired_invite_response(
+276-                        &self.ctx.app_handle,
+277-                        &self.ctx.paired_store,
+278-                        &remote.to_string(),
+279-                        response_str,
+280-                        None,
+281-                    );
+282-                }
+283-                ControlMessage::Recognition { signature } => {
+284-                    if verify_challenge(&remote, &keying, &signature) {
+285-
+286-                        let now = protocol::identity::unix_now_ms();
+287-                        let _ = self.ctx.paired_store.touch(&remote.to_string(), now);
+288-                        set_presence(
+289-                            &self.ctx.presence,
+290-                            &self.ctx.app_handle,
+291-                            &self.ctx.paired_store,
+292-                            &remote.to_string(),
+293-                            true
+294-                        );
+295-                    }
+296-                }
+297-                ControlMessage::Forget { signature } => {
+298-                    if verify_challenge(&remote, &keying, &signature) {
+299-
+300-                        if let Ok(Some(device)) = self
+301-                            .ctx
+302-                            .paired_store
+303-                            .mark_unpaired_remotely(&remote.to_string())
+304-                        {
+305-                            {
+306-                                let mut access = self.ctx.access.write().await;
+307-                                access.allowed.remove(&remote);
+308-                            }
+309-                            set_presence(
+310-                                &self.ctx.presence,
+311-                                &self.ctx.app_handle,
+312-                                &self.ctx.paired_store,
+313-                                &remote.to_string(),
+314-                                false
+315-                            );
+316-                            self.ctx
+317-                                .paired_connections
+318-                                .forget(&remote.to_string())
+319-                                .await;
+320-                            let payload = serde_json::json!({
+321-                                "endpoint_id": device.endpoint_id,
+322-                                "display_name": device.display_name,
+323-                                "reason": "remote",
+324-                            });
+325-                            if let Some(handle) = &self.ctx.app_handle {
+326-                                let _ = handle.emit_event_with_payload(
+327-                                    "device-unpaired",
+328-                                    &payload.to_string(),
+329-                                );
+330-                            }
+331-                        }
+332-                    }
+333-                }
+334-                ControlMessage::WhoAreYou
+335-                | ControlMessage::Identity { .. }
+336-                | ControlMessage::PairRequest { .. } => {
+337-                    // Discovery / pair-request messages; ignore on pairing-host sessions
+338-                }
+339-            }
+340-
+341-            if remote_info.is_some() && remote_vote == Some(RememberVote::Remember) {
+342-
+343-                if let Some(ControlMessage::PairingInfo {
+344-                    endpoint_id,
+345-                    display_name,
+346-                    device_type,
+347-                    os,
+348-                    ..
+349-                }) = &remote_info
+350-                {
+351-                    let now = protocol::identity::unix_now_ms();
+352-                    let relay_url = self
+353-                        .ctx
+354-                        .home_relay_url
+355-                        .read()
+356-                        .expect("home_relay_url")
+357-                        .clone();
+358-                    let device = PairedDevice {
+359-                        endpoint_id: endpoint_id.clone(),
+360-                        display_name: display_name.clone(),
+361-                        device_type: device_type.clone(),
+362-                        os: os.clone(),
+363-                        paired_at: now,
+364-                        last_seen_at: now,
+365-                        relay_url,
+366-                        pairing_status: PairingStatus::Active,
+367-                    };
+368-                    let _ = self.ctx.paired_store.remember(device);
+369-                    self.allow_peer(remote).await;
+370-                    self.ctx.paired_connections.refresh().await;
+371-
+372-                    crate::pairing_util::emit_device_paired(&self.ctx.app_handle, display_name);
+373-                }
+374-                pairing_completed = true;
+375-                break;
+376-            }
+377-        }
+378-
+379-        if remote_info.is_some() {
+380-
+381-            let vote = ControlMessage::RememberVote {
+382-                session_id,
+383-                vote: RememberVote::Remember,
+384-            };
+385-            let _ = write_message(&mut send, &vote).await;
+386-        }
+387-
+388-        if pairing_completed {
+389-            let persistent = self
+390-                .ctx
+391-                .pairing_host_persistent
+392-                .load(Ordering::SeqCst);
+393-            if !persistent {
+394-                self.ctx.access.write().await.pairing_host_open = false;
+395-
+396-            }
+397-            // Hold the session until the joiner reads our messages and disconnects.
+398-            drop(send);
+399-            drop(recv);
+400-
+401-            match tokio::time::timeout(Duration::from_secs(30), conn.closed()).await {
+402-                Ok(_closed) => {},
+403-                Err(_) => {
+404-                    }
+405-            }
+406-        } else if invite_received {
+407-            // Keep the session open until the sender finishes reading our side.
+408-            drop(send);
+409-            drop(recv);
+410-
+411-            match tokio::time::timeout(Duration::from_secs(15), conn.closed()).await {
+412-                Ok(_closed) => {},
+413-                Err(_) => {
+414-                    }
+415-            }
+416-        }
+417-
+418-        Ok(())
+419-    }
+420-
+421-    /// Message loop for an accepted control connection. An unpaired peer may
+422-    /// only probe identity or send an unpaired invite.
+423-    ///
+424-    /// Registration with `paired_connections` is lazy so a probe-only
+425-    /// connection can't clobber the peer's persistent session entry, and
+426-    /// `peer_is_paired` is only ever upgraded — a pairing can commit while
+427-    /// this session is already open.
+428-    async fn handle_control_session(
+429-        &self,
+430-        conn: Connection,
+431-        mut peer_is_paired: bool,
+432-    ) -> anyhow::Result<()> {
+433-        let remote = conn.remote_id();
+434-        let endpoint_id = remote.to_string();
+435-        let mut registered = false;
+436-
+437-        let keying = export_connection_keying_material(&conn)
+438-            .context("export keying material for control session")?;
+439-
+440-        loop {
+441-            let (mut send, mut recv) = match conn.accept_bi().await {
+442-                Ok(streams) => {
+443-
+444-                    streams
+445-                }
+446-                Err(_err) => {
+447-
+448-                    break;
+449-                }
+450-            };
+451-
+452-            let msg = match read_message(&mut recv).await {
+453-                Ok(m) => m,
+454-                Err(_err) => {
+455-
+456-                    continue;
+457-                }
+458-            };
+459-
+460-            // Re-read the allowlist before refusing: nearby pairing commits on
+461-            // a sibling connection, so this session can be accepted before the
+--
+532-
+533-        if registered {
+534-            self.ctx
+535-                .paired_connections
+536-                .unregister_inbound(&endpoint_id, &conn)
+537-                .await;
+538-        }
+539-
+540-        Ok(())
+541-    }
+542-
+543-    /// Returns true when the peer unpaired us and the session should close.
+544-    async fn handle_paired_control_message(
+545-        &self,
+546-        remote: &EndpointId,
+547-        keying: &[u8],
+548-        msg: ControlMessage,
+549-        peer_is_paired: bool,
+550-    ) -> bool {
+551-        match msg {
+552:            ControlMessage::Invite {
+553-                blob_ticket,
+554-                file_count,
+555-                total_size,
+556-                sender_name,
+557-            } => {
+558-
+559-                crate::pairing_util::emit_paired_invite_received(
+560-                    &self.ctx.app_handle,
+561-                    &remote.to_string(),
+562-                    &blob_ticket,
+563-                    file_count,
+564-                    total_size,
+565-                    &sender_name,
+566-                );
+567-            }
+568-            ControlMessage::PairRequest {
+569-                sender_name,
+570-                device_type,
+571-                os,
+572-            } => {
+573-                crate::pairing_util::emit_nearby_pair_request(
+574-                    &self.ctx.app_handle,
+575-                    &remote.to_string(),
+576-                    &sender_name,
+577-                    &device_type,
+578-                    &os,
+579-                );
+580-            }
+581-            ControlMessage::InviteResponse { response, .. } => {
+582-                // An unpaired peer could claim to be answering an invite we
+583-                // never sent, so match it against `pending_nearby_invites`.
+584-                // A decline creates no `PairedDevice`, so the pending snapshot
+585-                // is the only name the response event can carry.
+586-                let mut invited_name = None;
+587-                if !peer_is_paired {
+588-                    let pending = self
+589-                        .ctx
+590-                        .pending_nearby_invites
+591-                        .write()
+592-                        .await
+593-                        .remove(&remote.to_string());
+594-                    let Some(pending) = pending else {
+595-                        tracing::debug!(
+596-                            "ignoring InviteResponse from unpaired {remote} with no outstanding nearby invite"
+597-                        );
+598-                        return false;
+599-                    };
+600-                    invited_name = Some(pending.display_name.clone());
+601-                    // Mirrors `accept_nearby_invite` on the receiver's side;
+602-                    // without it their presence connection back to us is
+603-                    // rejected. A decline stays toast-only.
+604-                    if matches!(response, InviteResponse::Accepted) {
+605-                        self.commit_nearby_pairing(remote, pending).await;
+606-                    }
+607-                }
+608-
+609-                let response_str = match response {
+610-                    InviteResponse::Accepted => "accepted",
+611-                    InviteResponse::Declined => "declined",
+612-                };
+613-
+614-                crate::pairing_util::emit_paired_invite_response(
+615-                    &self.ctx.app_handle,
+616-                    &self.ctx.paired_store,
+617-                    &remote.to_string(),
+618-                    response_str,
+619-                    invited_name,
+620-                );
+621-            }
+622-            ControlMessage::Recognition { signature } => {
+623-
+624-                if verify_challenge(remote, keying, &signature) {
+625-
+626-                    let now = protocol::identity::unix_now_ms();
+627-                    let _ = self
+628-                        .ctx
+629-                        .paired_store
+630-                        .touch(&remote.to_string(), now);
+631-                    set_presence(
+632-                        &self.ctx.presence,
+633-                        &self.ctx.app_handle,
+634-                        &self.ctx.paired_store,
+635-                        &remote.to_string(),
+636-                        true
+637-                    );
+638-                }
+639-            }
+640-            ControlMessage::Forget { signature } => {
+641-
+642-                if verify_challenge(remote, keying, &signature) {
+643-
+644-                    let marked = self
+645-                        .ctx
+646-                        .paired_store
+647-                        .mark_unpaired_remotely(&remote.to_string());
+648-                    if let Ok(Some(device)) = marked {
+649-                        {
+650-                            let mut access = self.ctx.access.write().await;
+651-                            access.allowed.remove(remote);
+652-                        }
+653-                        set_presence(
+654-                            &self.ctx.presence,
+655-                            &self.ctx.app_handle,
+656-                            &self.ctx.paired_store,
+657-                            &remote.to_string(),
+658-                            false
+659-                        );
+660-                        self.ctx.paired_connections.forget(&remote.to_string()).await;
+661-                        let payload = serde_json::json!({
+662-                            "endpoint_id": device.endpoint_id,
+663-                            "display_name": device.display_name,
+664-                            "reason": "remote",
+665-                        });
+666-                        if let Some(handle) = &self.ctx.app_handle {
+667-
+668-                            let _ = handle.emit_event_with_payload(
+669-                                "device-unpaired",
+670-                                &payload.to_string(),
+671-                            );
+672-                        }
+673-                    }
+674-                    return true;
+675-                }
+676-            }
+677-            _other => {
+678-
+679-            }
+680-        }
+681-        false
+682-    }
+683-
+684-    /// Sender's half of mutual nearby pairing — the same record, allowlist
+685-    /// entry, refresh and `device-paired` event `accept_nearby_invite` gives
+686-    /// the receiver. Without it pairing stays one-sided and the peer's
+687-    /// presence connection back to us is rejected.
+688-    async fn commit_nearby_pairing(&self, remote: &EndpointId, pending: PendingNearbyInvite) {
+689-        let endpoint_id = remote.to_string();
+690-        tracing::debug!(
+691-            target: "dashbeam::_events::pairing::nearby_commit",
+692-            remote = %remote.fmt_short(),
+693-        );
+694-
+695-        // `pending` was snapshotted at click time and may hold an endpoint-id
+696-        // prefix; prefer whatever Nearby knows now.
+697-        let identified = {
+698-            let nearby = self.ctx.nearby.lock().await;
+699-            nearby
+700-                .list()
+701-                .into_iter()
+702-                .find(|d| d.identified && d.endpoint_id.eq_ignore_ascii_case(&endpoint_id))
+703-        };
+704-        let (display_name, device_type, os) = match identified {
+705-            Some(fresh) => (
+706-                fresh.display_name.unwrap_or(pending.display_name),
+707-                fresh.device_type.unwrap_or(pending.device_type),
+708-                fresh.os.unwrap_or(pending.os),
+709-            ),
+710-            None => (pending.display_name, pending.device_type, pending.os),
+711-        };
+712-
+713-        let now = protocol::identity::unix_now_ms();
+714-        if let Err(err) = self.ctx.paired_store.remember(PairedDevice {
+715-            endpoint_id: endpoint_id.clone(),
+716-            display_name,
+717-            device_type,
+718-            os,
+719-            paired_at: now,
+720-            last_seen_at: now,
+721-            relay_url: None,
+722-            pairing_status: PairingStatus::default(),
+723-        }) {
+724-            tracing::debug!(
+725-                "failed to remember nearby peer {remote} after mutual accept: {err:#}"
+726-            );
+727-            return;
+728-        }
+729-
+730-        // A paired record must not also show under Nearby.
+731-        self.ctx.nearby.lock().await.expire(&endpoint_id);
+732-        self.ctx.access.write().await.allowed.insert(*remote);
+733-        self.ctx.paired_connections.refresh().await;
+734-
+735-        let display_name = self
+736-            .ctx
+737-            .paired_store
+738-            .get(&endpoint_id)
+739-            .ok()
+740-            .flatten()
+741-            .map(|d| d.display_name)
+742-            .unwrap_or_default();
+743-        crate::pairing_util::emit_device_paired(&self.ctx.app_handle, &display_name);
+744-    }
+745-
+746-    async fn is_allowed(&self, remote: &EndpointId) -> bool {
+747-        self.ctx.access.read().await.allowed.contains(remote)
+748-    }
+749-
+750-    async fn allow_peer(&self, remote: EndpointId) {
+751-        let mut access = self.ctx.access.write().await;
+752-        access.allowed.insert(remote);
+753-    }
+754-}
+755-
+756-impl ProtocolHandler for ControlProtocol {
+757-    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+758-        let this = self.clone();
+759-
+760-        tokio::spawn(async move {
+761-            let _ = this.handle_connection(connection).await;
+762-        });
+763-
+764-        Ok(())
+765-    }
+766-}
+767-
+768-pub struct NodeService {
+769-    pub(crate) runtime: Arc<Mutex<NodeRuntime>>,
+770-    pub(crate) identity: Arc<DeviceIdentity>,
+771-    pub(crate) paired_store: Arc<PairedDeviceStore>,
+772-    pub(crate) access: Arc<RwLock<AccessState>>,
+--
+1354-                        }
+1355-                        conn
+1356-                    }
+1357-                    Ok(Err(_err)) => {
+1358-                        return Ok(false);
+1359-                    }
+1360-                    Err(_) => {
+1361-                        return Ok(false);
+1362-                    }
+1363-                }
+1364-            }
+1365-        };
+1366-
+1367-        let (mut send, _recv) = match conn.open_bi().await {
+1368-            Ok(streams) => streams,
+1369-            Err(err) => {
+1370-                return Err(err).context("open bi stream for invite");
+1371-            }
+1372-        };
+1373-
+1374:        let invite = ControlMessage::Invite {
+1375-            blob_ticket: blob_ticket.to_string(),
+1376-            file_count,
+1377-            total_size,
+1378-            sender_name: self.identity.display_name(),
+1379-        };
+1380-        if let Err(err) = write_message(&mut send, &invite).await {
+1381-
+1382-            return Err(err).context("write Invite message");
+1383-        }
+1384-
+1385-        // Hold the connection open in the background so the receiver can read
+1386-        // the invite, without blocking the caller.
+1387-        drop(send);
+1388-        tokio::spawn(async move {
+1389-
+1390-            match tokio::time::timeout(Duration::from_secs(15), conn.closed()).await {
+1391-                Ok(_closed) => {},
+1392-                // Expected while the receiver downloads; the invite landed.
+1393-                Err(_) => {},
+1394-            }
+1395-        });
+1396-
+1397-        Ok(true)
+1398-    }
+1399-
+1400-    async fn deliver_pair_request(&self, remote_endpoint_id: &str) -> anyhow::Result<bool> {
+1401-        let remote = EndpointId::from_str(remote_endpoint_id)?;
+1402-        let endpoint = {
+1403-            let runtime = self.runtime.lock().await;
+1404-            runtime.endpoint.clone()
+1405-        };
+1406-        let addr = build_control_connect_addr(&endpoint, remote, None);
+1407-
+1408-        let connect = tokio::time::timeout(
+1409-            Duration::from_secs(PRESENCE_CONNECT_TIMEOUT_SECS),
+1410-            endpoint.connect(addr, CONTROL_ALPN),
+1411-        )
+1412-        .await;
+1413-        let conn = match connect {
+1414-            Ok(Ok(conn)) => conn,
+1415-            Ok(Err(_err)) => return Ok(false),
+1416-            Err(_) => return Ok(false),
+1417-        };
+1418-
+1419-        let (mut send, _recv) = match conn.open_bi().await {
+1420-            Ok(streams) => streams,
+1421-            Err(err) => {
+1422-                return Err(err).context("open bi stream for pair request");
+1423-            }
+1424-        };
+1425-
+1426-        let request = ControlMessage::PairRequest {
+1427-            sender_name: self.identity.display_name(),
+1428-            device_type: self.identity.device_type(),
+1429-            os: self.identity.os(),
+1430-        };
+1431-        if let Err(err) = write_message(&mut send, &request).await {
+1432-            return Err(err).context("write PairRequest message");
+1433-        }
+1434-
+1435-        drop(send);
+1436-        tokio::spawn(async move {
+1437-            match tokio::time::timeout(Duration::from_secs(15), conn.closed()).await {
+1438-                Ok(_closed) => {}
+1439-                Err(_) => {}
+1440-            }
+1441-        });
+1442-
+1443-        Ok(true)
+1444-    }
+1445-
+1446-    pub async fn respond_paired_invite(
+1447-        &self,
+1448-        remote_endpoint_id: &str,
+1449-        accepted: bool,
+1450-    ) -> anyhow::Result<()> {
+1451-        let remote = EndpointId::from_str(remote_endpoint_id)?;
+1452-        debug!(
+1453-            target: "dashbeam::_events::pairing::invite_response",
+1454-            remote = %remote.fmt_short(),
+1455-            accepted,
+1456-        );
+1457-        let access = self.access.read().await;
+1458-        let in_allowlist = access.allowed.contains(&remote);
+1459-        drop(access);
+1460-        if !in_allowlist {
+1461-
+1462-            anyhow::bail!("unknown paired device");
+1463-        }
+1464-
+1465-        self.deliver_invite_response(remote_endpoint_id, accepted, true)
+1466-            .await
+1467-    }
+1468-
+1469-    /// Records the peer as paired — the durable consequence of the user having
+1470-    /// compared the fingerprint on screen — then notifies the sender via
+1471-    /// [`Self::deliver_invite_response`].
+1472-    pub async fn accept_nearby_invite(&self, endpoint_id: &str) -> anyhow::Result<()> {
+1473-        // The probe reply's `endpoint_id` is self-reported; only trust its
+1474-        // cosmetic fields, and only if the id matches the verified one.
+1475-        let info = nearby_peer_identity(endpoint_id, self.probe_identity(endpoint_id).await.ok());
+1476-
+1477-        let now = protocol::identity::unix_now_ms();
+1478-        let display_name = info.display_name.clone();
+1479-        self.paired_store.remember(PairedDevice {
+1480-            endpoint_id: info.endpoint_id.clone(),
+1481-            display_name: info.display_name,
+1482-            device_type: info.device_type,
+1483-            os: info.os,
+1484-            paired_at: now,
+1485-            last_seen_at: now,
+1486-            relay_url: None,
+1487-            pairing_status: PairingStatus::default(),
+1488-        })?;
+1489-
+1490-        // Now that a paired record exists, it must not also show under Nearby.
+1491-        self.nearby.lock().await.expire(endpoint_id);
+1492-        self.access.write().await.allowed.insert(endpoint_id.parse()?);
+1493-
+1494-        crate::pairing_util::emit_device_paired(&self.app_handle, &display_name);
+1495-
+1496-        // The pairing above is already durable, so notifying a sender that may
+1497-        // have gone away must not report the accept as failed. No cached
+1498-        // session either — we just met this peer.
+1499-        //
+1500-        // Must precede `paired_connections.refresh()`, whose `Recognition` an
+1501-        // uncommitted sender closes as unpaired, reading as a remote unpair.
+1502-        if let Err(err) = self.deliver_invite_response(endpoint_id, true, false).await {
+1503-            tracing::debug!(
+1504-                "accepted nearby invite from {endpoint_id} but could not notify the sender: {err:#}"
+1505-            );
+1506-        }
+1507-
+1508-        tracing::debug!(
+1509-            target: "dashbeam::_events::pairing::nearby_accept",
+1510-            remote = %short_remote(endpoint_id),
+1511-        );
+1512-        self.paired_connections.refresh().await;
+1513-
+1514-        Ok(())
+1515-    }
+1516-
+1517-    pub async fn decline_nearby_invite(
+1518-        &self,
+1519-        endpoint_id: &str,
+1520-        block: bool,
+1521-    ) -> anyhow::Result<()> {
+1522-        if block {
+1523-            self.nearby.lock().await.expire(endpoint_id);
+1524-            self.blocked.write().await.insert(endpoint_id.to_string());
+1525-        }
+1526-        self.deliver_invite_response(endpoint_id, false, false)
+1527-            .await
+1528-    }
+1529-
+1530-    /// Connects to `remote_endpoint_id` and delivers an `InviteResponse`.
+1531-    /// Shared by [`Self::respond_paired_invite`], [`Self::accept_nearby_invite`],
+1532-    /// and [`Self::decline_nearby_invite`] — see [`Self::deliver_invite`] for
+1533-    /// why `use_cached_session` exists.
+1534-    async fn deliver_invite_response(
+1535-        &self,
+1536-        remote_endpoint_id: &str,
+1537-        accepted: bool,
+1538-        use_cached_session: bool,
+1539-    ) -> anyhow::Result<()> {
+1540-        let remote = EndpointId::from_str(remote_endpoint_id)?;
+1541-        let response = if accepted {
+1542-            InviteResponse::Accepted
+1543-        } else {
+1544-            InviteResponse::Declined
+1545-        };
+1546-
+1547-        let stored_relay = self
+1548-            .paired_store
+1549-            .get(remote_endpoint_id)?
+1550-            .and_then(|d| d.relay_url);
+1551-
+1552-        let cached = if use_cached_session {
+1553-            self.paired_connections
+1554-                .wait_for_connection(remote_endpoint_id, invite_wait_timeout())
+1555-                .await
+1556-        } else {
+1557-            None
+1558-        };
+1559-
+1560-        let conn = match cached {
+1561-            Some(conn) => conn,
+1562-            None => {
+1563-                let endpoint = {
+1564-                    let runtime = self.runtime.lock().await;
+1565-                    runtime.endpoint.clone()
+1566-                };
+1567-                let addr = build_control_connect_addr(
+1568-                    &endpoint,
+1569-                    remote,
+1570-                    stored_relay.as_deref(),
+1571-                );
+1572-                let connect = tokio::time::timeout(
+1573-                    Duration::from_secs(PRESENCE_CONNECT_TIMEOUT_SECS),
+1574-                    endpoint.connect(addr, CONTROL_ALPN),
+1575-                )
+1576-                .await;
+1577-                match connect {
+1578-                    Ok(Ok(conn)) => conn,
+1579-                    Ok(Err(err)) => {
+1580-                        return Err(err).context("invite response connect failed");
+1581-                    }
+1582-                    Err(_) => anyhow::bail!("invite response connect timeout"),
+1583-                }
+1584-            }
+1585-        };
+1586-
+1587-        let (mut send, _recv) = conn
+1588-            .open_bi()
+1589-            .await
+1590-            .context("open bi stream for invite response")?;
+1591-        let message = ControlMessage::InviteResponse {
+1592-            session_id: String::new(),
+1593-            response,
+1594-        };
+=== DELIVER INVITE ===
+1282-                    .unwrap_or_else(protocol::identity::default_device_type),
+1283-                os: d.os.unwrap_or_default(),
+1284-            },
+1285-            None => PendingNearbyInvite {
+1286-                display_name: endpoint_id.chars().take(8).collect(),
+1287-                device_type: protocol::identity::default_device_type(),
+1288-                os: String::new(),
+1289-            },
+1290-        };
+1291-        self.pending_nearby_invites
+1292-            .write()
+1293-            .await
+1294-            .insert(endpoint_id.to_string(), pending);
+1295-
+1296-        Ok(true)
+1297-    }
+1298-
+1299-    /// Delivers a single `Invite` to `remote_endpoint_id`. Shared by the paired
+1300-    /// and nearby invite paths — only their preconditions differ.
+1301-    /// `use_cached_session` is false for a peer we've never talked to.
+1302:    async fn deliver_invite(
+1303-        &self,
+1304-        remote_endpoint_id: &str,
+1305-        blob_ticket: &str,
+1306-        file_count: u32,
+1307-        total_size: u64,
+1308-        use_cached_session: bool,
+1309-    ) -> anyhow::Result<bool> {
+1310-        let remote = EndpointId::from_str(remote_endpoint_id)?;
+1311-        let stored_relay = self
+1312-            .paired_store
+1313-            .get(remote_endpoint_id)?
+1314-            .and_then(|d| d.relay_url);
+1315-
+1316-        let cached = if use_cached_session {
+1317-            self.paired_connections
+1318-                .wait_for_connection(remote_endpoint_id, invite_wait_timeout())
+1319-                .await
+1320-        } else {
+1321-            None
+1322-        };
+1323-
+1324-        let conn = match cached {
+1325-            Some(conn) => conn,
+1326-            None => {
+1327-                let endpoint = {
+1328-                    let runtime = self.runtime.lock().await;
+1329-                    runtime.endpoint.clone()
+1330-                };
+1331-                let addr = build_control_connect_addr(
+1332-                    &endpoint,
+1333-                    remote,
+1334-                    stored_relay.as_deref(),
+1335-                );
+1336-
+1337-                let connect = tokio::time::timeout(
+1338-                    Duration::from_secs(PRESENCE_CONNECT_TIMEOUT_SECS),
+1339-                    endpoint.connect(addr, CONTROL_ALPN),
+1340-                )
+1341-                .await;
+1342-                match connect {
+1343-                    Ok(Ok(conn)) => {
+1344-                        if use_cached_session {
+1345-                            let now = protocol::identity::unix_now_ms();
+1346-                            let _ = self.paired_store.touch(remote_endpoint_id, now);
+1347-                            set_presence(
+1348-                                &self.presence,
+1349-                                &self.app_handle,
+1350-                                &self.paired_store,
+1351-                                remote_endpoint_id,
+1352-                                true,
+1353-                            );
+1354-                        }
+1355-                        conn
+1356-                    }
+1357-                    Ok(Err(_err)) => {
+1358-                        return Ok(false);
+1359-                    }
+1360-                    Err(_) => {
+1361-                        return Ok(false);
+1362-                    }
+1363-                }
+1364-            }
+1365-        };
+1366-
+1367-        let (mut send, _recv) = match conn.open_bi().await {
+1368-            Ok(streams) => streams,
+1369-            Err(err) => {
+1370-                return Err(err).context("open bi stream for invite");
+1371-            }
+1372-        };
+1373-
+1374-        let invite = ControlMessage::Invite {
+1375-            blob_ticket: blob_ticket.to_string(),
+1376-            file_count,
+1377-            total_size,
+1378-            sender_name: self.identity.display_name(),
+1379-        };
+1380-        if let Err(err) = write_message(&mut send, &invite).await {
+1381-
+1382-            return Err(err).context("write Invite message");
+1383-        }
+1384-
+1385-        // Hold the connection open in the background so the receiver can read
+1386-        // the invite, without blocking the caller.
+1387-        drop(send);
+1388-        tokio::spawn(async move {
+1389-
+1390-            match tokio::time::timeout(Duration::from_secs(15), conn.closed()).await {
+1391-                Ok(_closed) => {},
+1392-                // Expected while the receiver downloads; the invite landed.
+1393-                Err(_) => {},
+1394-            }
+1395-        });
+1396-
+1397-        Ok(true)
+1398-    }
+1399-
+1400-    async fn deliver_pair_request(&self, remote_endpoint_id: &str) -> anyhow::Result<bool> {
+1401-        let remote = EndpointId::from_str(remote_endpoint_id)?;
+1402-        let endpoint = {
+--
+1514-        Ok(())
+1515-    }
+1516-
+1517-    pub async fn decline_nearby_invite(
+1518-        &self,
+1519-        endpoint_id: &str,
+1520-        block: bool,
+1521-    ) -> anyhow::Result<()> {
+1522-        if block {
+1523-            self.nearby.lock().await.expire(endpoint_id);
+1524-            self.blocked.write().await.insert(endpoint_id.to_string());
+1525-        }
+1526-        self.deliver_invite_response(endpoint_id, false, false)
+1527-            .await
+1528-    }
+1529-
+1530-    /// Connects to `remote_endpoint_id` and delivers an `InviteResponse`.
+1531-    /// Shared by [`Self::respond_paired_invite`], [`Self::accept_nearby_invite`],
+1532-    /// and [`Self::decline_nearby_invite`] — see [`Self::deliver_invite`] for
+1533-    /// why `use_cached_session` exists.
+1534:    async fn deliver_invite_response(
+1535-        &self,
+1536-        remote_endpoint_id: &str,
+1537-        accepted: bool,
+1538-        use_cached_session: bool,
+1539-    ) -> anyhow::Result<()> {
+1540-        let remote = EndpointId::from_str(remote_endpoint_id)?;
+1541-        let response = if accepted {
+1542-            InviteResponse::Accepted
+1543-        } else {
+1544-            InviteResponse::Declined
+1545-        };
+1546-
+1547-        let stored_relay = self
+1548-            .paired_store
+1549-            .get(remote_endpoint_id)?
+1550-            .and_then(|d| d.relay_url);
+1551-
+1552-        let cached = if use_cached_session {
+1553-            self.paired_connections
+1554-                .wait_for_connection(remote_endpoint_id, invite_wait_timeout())
+1555-                .await
+1556-        } else {
+1557-            None
+1558-        };
+1559-
+1560-        let conn = match cached {
+1561-            Some(conn) => conn,
+1562-            None => {
+1563-                let endpoint = {
+1564-                    let runtime = self.runtime.lock().await;
+1565-                    runtime.endpoint.clone()
+1566-                };
+1567-                let addr = build_control_connect_addr(
+1568-                    &endpoint,
+1569-                    remote,
+1570-                    stored_relay.as_deref(),
+1571-                );
+1572-                let connect = tokio::time::timeout(
+1573-                    Duration::from_secs(PRESENCE_CONNECT_TIMEOUT_SECS),
+1574-                    endpoint.connect(addr, CONTROL_ALPN),
+1575-                )
+1576-                .await;
+1577-                match connect {
+1578-                    Ok(Ok(conn)) => conn,
+1579-                    Ok(Err(err)) => {
+1580-                        return Err(err).context("invite response connect failed");
+1581-                    }
+1582-                    Err(_) => anyhow::bail!("invite response connect timeout"),
+1583-                }
+1584-            }
+1585-        };
+1586-
+1587-        let (mut send, _recv) = conn
+1588-            .open_bi()
+1589-            .await
+1590-            .context("open bi stream for invite response")?;
+1591-        let message = ControlMessage::InviteResponse {
+1592-            session_id: String::new(),
+1593-            response,
+1594-        };
+1595-        write_message(&mut send, &message)
+1596-            .await
+1597-            .context("write InviteResponse message")?;
+1598-
+1599-        // On a freshly dialed connection `conn` is the only handle, and iroh
+1600-        // closes on last-handle drop — returning now would race the in-flight
+1601-        // write against the receiver's `accept_bi()`. Hold it in the background.
+1602-        drop(send);
+1603-        tokio::spawn(async move {
+1604-            let _ = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await;
+1605-        });
+1606-
+1607-        Ok(())
+1608-    }
+1609-
+1610-    /// Rebuilds the network only when the transition crosses the `Off`
+1611-    /// boundary — `Everyone` <-> `PairedOnly` both publish over mDNS and
+1612-    /// differ only in who gets an identity reply. A rebuild is required
+1613-    /// because iroh 1.0.3 can't unregister a live address-lookup service; see
+1614-    /// `rebuild_network`.
+1615-    ///
+1616-    /// The whole decide-rebuild-clear sequence runs under
+1617-    /// `network_transition` so a competing transition can't invalidate
+1618-    /// `now_off` before the clear runs.
+1619-    pub async fn set_discoverability(&self, setting: Discoverability) -> anyhow::Result<()> {
+1620-        let _guard = self.network_transition.lock().await;
+1621-
+1622-        tracing::debug!(
+1623-            target: "dashbeam::_events::nearby::discoverability",
+1624-            requested = ?setting,
+1625-        );
+1626-
+1627-        let previous = {
+1628-            let mut access = self.access.write().await;
+1629-            let previous = access.discoverability;
+1630-            access.discoverability = setting;
+1631-            previous
+1632-        };
+1633-
+1634-        let now_off = matches!(setting, Discoverability::Off);
+=== NODE STRUCT ===
+758-        let this = self.clone();
+759-
+760-        tokio::spawn(async move {
+761-            let _ = this.handle_connection(connection).await;
+762-        });
+763-
+764-        Ok(())
+765-    }
+766-}
+767-
+768:pub struct NodeService {
+769-    pub(crate) runtime: Arc<Mutex<NodeRuntime>>,
+770-    pub(crate) identity: Arc<DeviceIdentity>,
+771-    pub(crate) paired_store: Arc<PairedDeviceStore>,
+772-    pub(crate) access: Arc<RwLock<AccessState>>,
+773-    pub(crate) pairing_host_open: Arc<AtomicBool>,
+774-    pub(crate) pairing_host_persistent: Arc<AtomicBool>,
+775-    /// True after the endpoint has reached its home relay (or relay is disabled).
+776-    network_ready: Arc<AtomicBool>,
+777-    pub(crate) pairing_expire_task: Mutex<Option<JoinHandle<()>>>,
+778-    pub(crate) paired_connections: Arc<PairedConnectionManager>,
+779-    connections_supervisor: Mutex<Option<JoinHandle<()>>>,
+780-    presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
+781-    pub(crate) app_handle: AppHandle,
+782-    relay_mode: Mutex<RelayMode>,
+783-    discovery_mode: Mutex<DiscoveryModeOption>,
+784-    /// Devices seen on the local network but not yet paired. Fed by
+785-    /// `lan_discovery`'s mDNS pump; see `spawn_lan_event_loop`.
+786-    nearby: Arc<Mutex<NearbyRegistry>>,
+787-    /// `None` when discovery isn't running: `Discoverability::Off`, or the
+788-    /// mDNS pump failed to start (no multicast, VPN, isolated guest network).
+789-    lan_discovery: Mutex<Option<LanDiscoveryHandle>>,
+790-    /// Why LAN discovery failed to start, or `None` when running or off. Kept
+791-    /// queryable because `nearby-unavailable` can fire before the UI listens.
+792-    nearby_unavailable: Arc<std::sync::RwLock<Option<String>>>,
+793-    /// See `ControlCtx::unpaired_limiter`. Owned here so rebuilds reuse it.
+794-    unpaired_limiter: Arc<std::sync::Mutex<UnpairedRateLimiter>>,
+795-    /// Peers declined-and-blocked from a nearby invite. Checked in
+796-    /// `PairedOnlyHook::after_handshake`, so they're rejected at the handshake.
+797-    blocked: Arc<RwLock<HashSet<String>>>,
+798-    /// Same map as `ControlCtx::pending_nearby_invites`, shared with it.
+799-    pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
+800-    /// Serializes `reconfigure_network`, `set_discoverability` and `shutdown`.
+801-    /// Held across each one's whole decide-rebuild-settle sequence so the
+802-    /// decision can't go stale before its consequence runs.
+803-    network_transition: Mutex<()>,
+804-}
+805-
+806-impl NodeService {
+807-    /// `discoverability` is applied before discovery starts, so a device set
+808-    /// to `Off` never registers the mDNS publisher — not even briefly.
+809-    pub async fn start(
+810-        data_dir: &Path,
+811-        relay_mode: RelayMode,
+812-        discovery_mode: DiscoveryModeOption,
+813-        discoverability: Discoverability,
+814-        app_handle: AppHandle,
+815-    ) -> anyhow::Result<Self> {
+816-
+817-        let identity = Arc::new(load_or_create_identity(data_dir)?);
+818-        let paired_store = Arc::new(PairedDeviceStore::new(data_dir));
+819-        let allowed = load_allowed_from_store(&paired_store)?;
+820-
+821-        if identity.identity_rotated {
+822-            let stale_count = paired_store
+823-                .mark_stale_after_local_identity_rotation()
+824-                .unwrap_or(0);
+825-
+826-            if stale_count > 0 {
+827-                if let Some(handle) = &app_handle {
+828-                    let payload = serde_json::json!({
+829-                        "previous_endpoint_id": identity.previous_endpoint_id,
+830-                        "current_endpoint_id": identity.endpoint_id(),
+831-                        "stale_device_count": stale_count,
+832-                    });
+833-
+834-                    let _ = handle.emit_event_with_payload(
+835-                        "identity-rotated",
+836-                        &payload.to_string(),
+837-                    );
+838-                }
+839-            }
+840-        }
+841-
+842-        let access = Arc::new(RwLock::new(AccessState {
+843-            allowed: allowed.clone(),
+844-            pairing_host_open: false,
+845-            discoverability,
+846-        }));
+847-        let pairing_host_open = Arc::new(AtomicBool::new(false));
+848-        let pairing_host_persistent = Arc::new(AtomicBool::new(false));
+849-        let network_ready = Arc::new(AtomicBool::new(false));
+850-        let presence = Arc::new(std::sync::RwLock::new(HashMap::new()));
+851-        let blocked: Arc<RwLock<HashSet<String>>> = Arc::new(RwLock::new(HashSet::new()));
+852-        let pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>> =
+853-            Arc::new(RwLock::new(HashMap::new()));
+854-        // Created before `build_runtime` because `ControlCtx` needs it too.
+855-        let nearby = Arc::new(Mutex::new(NearbyRegistry::new()));
+856-        let nearby_unavailable: Arc<std::sync::RwLock<Option<String>>> =
+857-            Arc::new(std::sync::RwLock::new(None));
+858-        let unpaired_limiter = Arc::new(std::sync::Mutex::new(UnpairedRateLimiter::new()));
+859-
+860-        let paired_connections = Arc::new(PairedConnectionManager::new(
+861-            identity.clone(),
+862-            paired_store.clone(),
+863-            access.clone(),
+864-            presence.clone(),
+865-            app_handle.clone(),
+866-        ));
+867-
+868-        let runtime = build_runtime(
+=== LAN DISCOVERY ===
+//! mDNS lifecycle. The only module in the engine that touches multicast.
+//!
+//! Everything downstream consumes `NearbyRegistry`, which takes injected
+//! observations — so the rest of the feature is testable without multicast.
+
+use anyhow::Context;
+use iroh::Endpoint;
+use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
+use n0_future::StreamExt;
+use tokio::sync::mpsc;
+
+/// What the mDNS pump observed. Deliberately dumb: all policy lives in
+/// `node.rs`, so nothing here needs a network to test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LanEvent {
+    Appeared { endpoint_id: String },
+    Vanished { endpoint_id: String },
+}
+
+pub struct LanDiscovery {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl LanDiscovery {
+    /// Registers the mDNS publisher on `endpoint` and pumps sightings into `tx`.
+    ///
+    /// Failure is not fatal (no multicast, VPN, isolated guest network) — the
+    /// app keeps working with pairing codes and relays.
+    pub fn start(endpoint: &Endpoint, tx: mpsc::UnboundedSender<LanEvent>) -> anyhow::Result<Self> {
+        let mdns = MdnsAddressLookup::builder()
+            .build(endpoint.id())
+            .context("build mDNS address lookup")?;
+
+        endpoint
+            .address_lookup()
+            .context("endpoint has no address lookup registry")?
+            .add(mdns.clone());
+
+        // Answers "is this device advertising at all?" — the first question in
+        // every "the other device can't see me" report.
+        tracing::debug!(
+            target: "dashbeam::_events::nearby::mdns_advertising",
+            local = %endpoint.id().fmt_short(),
+        );
+
+        let task = tokio::spawn(async move {
+            let mut events = mdns.subscribe().await;
+            while let Some(event) = events.next().await {
+                let mapped = match event {
+                    DiscoveryEvent::Discovered { endpoint_info, .. } => {
+                        tracing::debug!(
+                            target: "dashbeam::_events::nearby::mdns_discovered",
+                            remote = %endpoint_info.endpoint_id.fmt_short(),
+                        );
+                        LanEvent::Appeared {
+                            endpoint_id: endpoint_info.endpoint_id.to_string(),
+                        }
+                    }
+                    DiscoveryEvent::Expired { endpoint_id } => {
+                        tracing::debug!(
+                            target: "dashbeam::_events::nearby::mdns_expired",
+                            remote = %endpoint_id.fmt_short(),
+                        );
+                        LanEvent::Vanished {
+                            endpoint_id: endpoint_id.to_string(),
+                        }
+                    }
+                    // `DiscoveryEvent` is `#[non_exhaustive]`. Logged so an
+                    // upstream addition doesn't look like multicast went quiet.
+                    _ => {
+                        tracing::debug!(
+                            target: "dashbeam::_events::nearby::mdns_unhandled",
+                            "unrecognised mDNS discovery event",
+                        );
+                        continue;
+                    }
+                };
+                // Receiver gone means the node is shutting down.
+                if tx.send(mapped).is_err() {
+                    break;
+                }
+            }
+            tracing::debug!(
+                target: "dashbeam::_events::nearby::mdns_pump_stopped",
+                "mDNS event pump exited",
+            );
+        });
+
+        Ok(Self { task })
+    }
+
+    pub fn shutdown(self) {
+        tracing::debug!(
+            target: "dashbeam::_events::nearby::mdns_shutdown",
+            "stopping mDNS advertising",
+        );
+        self.task.abort();
+    }
+}
