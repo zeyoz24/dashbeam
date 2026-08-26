@@ -1,0 +1,101 @@
+            &app_handle,
+            &history,
+            TransferDirection::Send,
+            TransferContext {
+                root_name: metadata.file_name.clone(),
+                payload_bytes: metadata.size,
+                item_count: metadata.item_count,
+                path_type: path_type_from_mime(metadata.mime_type.as_deref()),
+                ..Default::default()
+            },
+        );
+
+        // Ephemeral share — relay settings apply per session (all platforms including Android).
+        let result = start_share_items(path_bufs.clone(), options, &boxed_handle, Some(metadata))
+            .await
+            .map_err(|error| {
+                // Without this, sender-side bug reports end at connection setup.
+                tracing::error!(
+                    target: "dashbeam::_events::transfer::send_failed",
+                    item_count = path_bufs.len(),
+                    %error,
+                );
+                format!("Failed to start sharing: {}", error)
+            })?;
+        if let Some(payload) = relay_fallback_event_payload("send", fell_back_to_public) {
+            // Surface the selected custom->public fallback once the share has
+            // actually started with the resolved relay mode.
+            let _ = app_handle.emit("relay-fell-back", payload);
+        }
+        if let Some(recorder) = recorder.as_ref() {
+            let hash = result.hash.clone();
+            recorder.update_context(|context| context.blob_hash = Some(hash));
+        }
+        Ok((result.ticket.clone(), path_bufs, result, recorder))
+    }
+    .await;
+
+    match start_result {
+        Ok((ticket, paths, result, recorder)) => {
+            let mut app_state = state.lock().await;
+            app_state.is_share_starting = false;
+
+            if app_state.current_share.is_some() {
+                return Err("Already sharing a file. Please stop current share first.".to_string());
+            }
+
+            // Keep full send result alive to preserve router/temp_tag lifecycle.
+            let primary = paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+            app_state.current_share =
+                Some(ShareHandle::new(ticket.clone(), primary, result, recorder));
+            Ok(ticket)
+        }
+        Err(e) => {
+            let mut app_state = state.lock().await;
+            app_state.is_share_starting = false;
+            Err(e)
+        }
+    }
+}
+
+async fn build_send_metadata(paths: &[PathBuf]) -> Result<FileMetadata, String> {
+    if paths.is_empty() {
+        return Err("No paths provided".to_string());
+    }
+
+    let total_size = {
+        let paths_for_size = paths.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let mut total = 0u64;
+            for path in &paths_for_size {
+                total = total.saturating_add(get_total_size(path)?);
+            }
+            Ok::<u64, String>(total)
+        })
+        .await
+        .map_err(|e| format!("Task join error: {}", e))??
+    };
+
+    if paths.len() == 1 {
+        let path = &paths[0];
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+
+        let thumbnail = generate_thumbnail(path).await;
+        let mime_type = if path.is_file() {
+            Some(
+                mime_guess::from_path(path)
+                    .first_or_octet_stream()
+                    .essence_str()
+                    .to_string(),
+            )
+        } else {
+            Some("inode/directory".to_string())
+        };
+
+        return Ok(FileMetadata {
+            file_name,
+            item_count: 1,

@@ -1,0 +1,101 @@
+        }
+        if let Err(e) = share.stop().await {
+            return Err(e);
+        }
+
+        #[cfg(target_os = "android")]
+        std::fs::remove_dir_all(&share._path);
+    }
+
+    #[cfg(any(desktop, target_os = "android"))]
+    if let Some(node) = app_state.node.as_ref() {
+        node.stop_pairing_host().await;
+    }
+
+    Ok(())
+}
+
+/// Receive a file using a ticket
+#[tauri::command]
+pub async fn receive_file(
+    ticket: String,
+    output_path: String,
+    tree_uri: Option<String>,
+    relay: Option<RelayConfigArg>,
+    discovery: Option<DiscoveryConfigArg>,
+    state: State<'_, AppStateMutex>,
+    history: State<'_, Arc<TransferHistoryStore>>,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    use iroh_blobs::ticket::BlobTicket;
+    use std::str::FromStr;
+
+    let output_dir = resolve_receive_output_dir(&app_handle, output_path)?;
+    let (relay_mode, fell_back_to_public) = resolve_relay_mode_with_fallback(relay).await?;
+    let discovery_mode = build_discovery_mode(discovery)?;
+    let options = ReceiveOptions {
+        output_dir: Some(output_dir.clone()),
+        relay_mode,
+        discovery_mode,
+        magic_ipv4_addr: None,
+        magic_ipv6_addr: None,
+    };
+
+    // Derive the content hash so we can manage partial store lifecycle.
+    let incoming_hash = BlobTicket::from_str(&ticket)
+        .ok()
+        .map(|t| t.hash().to_hex().to_string());
+
+    // If a previous cancel left a partial store for a *different* hash, delete it now.
+    // Same hash → keep it for resume. Different hash → it would never be reused.
+    // Only act when we know the new hash; if the ticket is unparseable, leave the
+    // stale entry intact so the next valid attempt can still clean it up.
+    if let Some(ref new_hash) = incoming_hash {
+        let stale_hash = state.lock().await.last_cancelled_recv_hash.take();
+        if let Some(stale_hash) = stale_hash {
+            if &stale_hash != new_hash {
+                let stale_dir = std::env::temp_dir().join(format!(".sendme-recv-{}", stale_hash));
+                if stale_dir.exists() {
+                    if let Err(e) = tokio::fs::remove_dir_all(&stale_dir).await {
+                        tracing::warn!("Failed to remove stale partial recv store: {}", e);
+                    } else {
+                        tracing::info!("Removed stale partial recv store for hash {}", stale_hash);
+                    }
+                }
+            }
+        }
+    }
+
+    // The sender's endpoint id rides in the ticket, so the peer is known before
+    // the connection exists. `resumable_store_path` is set at open, not finalize
+    // — a crash never reaches finalize, stranding the partial store.
+    let sender_peer = sender_peer_from_ticket(&ticket, &app_state_node(&state).await);
+    let (boxed_handle, recorder) = build_emitter(
+        &app_handle,
+        &history,
+        TransferDirection::Receive,
+        TransferContext {
+            blob_hash: incoming_hash.clone(),
+            save_path: Some(output_dir.to_string_lossy().to_string()),
+            resumable_store_path: incoming_hash
+                .as_deref()
+                .map(|hash| partial_store_path_for(hash).to_string_lossy().to_string()),
+            peer: sender_peer,
+            ..Default::default()
+        },
+    );
+
+    if let Some(payload) = relay_fallback_event_payload("receive", fell_back_to_public) {
+        let _ = app_handle.emit("relay-fell-back", payload);
+    }
+
+    // Create a cancel channel and store the sender so cancel_receive can fire it.
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut app_state = state.lock().await;
+        if app_state.current_receive_cancel.is_some() {
+            return Err(
+                "Already receiving a file. Wait for the current download to finish.".to_string(),
+            );
+        }
+        app_state.current_receive_cancel = Some(cancel_tx);

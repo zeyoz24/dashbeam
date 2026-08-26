@@ -1,0 +1,250 @@
+frontend/src/hooks/useInviteNotifications.ts:76:					// Without this wait a paired sender's invite briefly looks
+frontend/src/hooks/useSender.ts:28:import { useSenderStore } from '../store/sender-store'
+frontend/src/hooks/useSender.ts:38:export interface UseSenderReturn {
+frontend/src/hooks/useSender.ts:47:	ticket: string | null
+frontend/src/hooks/useSender.ts:77:	copyTicket: () => Promise<void>
+frontend/src/hooks/useSender.ts:83:export function useSender(): UseSenderReturn {
+frontend/src/hooks/useSender.ts:89:		ticket,
+frontend/src/hooks/useSender.ts:101:		setTicket,
+frontend/src/hooks/useSender.ts:116:	} = useSenderStore()
+frontend/src/hooks/useSender.ts:156:		if (!ticket) {
+frontend/src/hooks/useSender.ts:159:	}, [ticket])
+frontend/src/hooks/useSender.ts:263:				const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:278:						const currentViewState = useSenderStore.getState().viewState
+frontend/src/hooks/useSender.ts:293:						const currentViewState = useSenderStore.getState().viewState
+frontend/src/hooks/useSender.ts:313:						const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:341:					const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:443:								'[useSender] transfer-completed: failed to get file size:',
+frontend/src/hooks/useSender.ts:450:							'[useSender] transfer-completed: no path available to set metadata',
+frontend/src/hooks/useSender.ts:472:				const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:538:						'[useSender] transfer-failed: NO PATH AVAILABLE - this should not happen due to guards!'
+frontend/src/hooks/useSender.ts:594:		const nextSelectedCount = useSenderStore.getState().selectedPaths.length
+frontend/src/hooks/useSender.ts:633:		const remaining = useSenderStore.getState().selectedPaths
+frontend/src/hooks/useSender.ts:658:				'[useSender] startSharing: no selectedPaths, returning early'
+frontend/src/hooks/useSender.ts:678:			setTicket(result)
+frontend/src/hooks/useSender.ts:681:			console.error('[useSender] startSharing: failed:', error)
+frontend/src/hooks/useSender.ts:708:			const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:778:			setTicket(null)
+frontend/src/hooks/useSender.ts:813:		if (!ticket) {
+frontend/src/hooks/useSender.ts:836:			device?.display_name ?? t('common:sender.pairedDevices.unknownPeer')
+frontend/src/hooks/useSender.ts:847:				ticket,
+frontend/src/hooks/useSender.ts:854:					title: t('common:sender.pairedDevices.inviteSentTo', {
+frontend/src/hooks/useSender.ts:857:					description: t('common:sender.pairedDevices.inviteSentDesc'),
+frontend/src/hooks/useSender.ts:864:				title: t('common:sender.pairedDevices.inviteFailed'),
+frontend/src/hooks/useSender.ts:865:				description: t('common:sender.pairedDevices.deviceUnreachable'),
+frontend/src/hooks/useSender.ts:873:				title: t('common:sender.pairedDevices.inviteFailed'),
+frontend/src/hooks/useSender.ts:883:		if (!ticket) {
+frontend/src/hooks/useSender.ts:909:				: t('common:sender.pairedDevices.unknownPeer'))
+frontend/src/hooks/useSender.ts:916:				ticket,
+frontend/src/hooks/useSender.ts:923:					title: t('common:sender.pairedDevices.inviteSentTo', {
+frontend/src/hooks/useSender.ts:926:					description: t('common:sender.pairedDevices.inviteSentDesc'),
+frontend/src/hooks/useSender.ts:929:				// The receiver is being asked to check this code against our
+frontend/src/hooks/useSender.ts:939:				title: t('common:sender.pairedDevices.inviteFailed'),
+frontend/src/hooks/useSender.ts:948:				title: t('common:sender.pairedDevices.inviteFailed'),
+frontend/src/hooks/useSender.ts:957:	const copyTicket = async () => {
+frontend/src/hooks/useSender.ts:958:		if (ticket) {
+frontend/src/hooks/useSender.ts:960:				await copyTextToClipboard(ticket)
+frontend/src/hooks/useSender.ts:964:				console.error('Failed to copy ticket:', error)
+frontend/src/hooks/useSender.ts:984:		ticket,
+frontend/src/hooks/useSender.ts:1008:		copyTicket,
+frontend/src/hooks/usePairing.ts:34:	const [pairingTicket, setPairingTicket] = useState<string | null>(null)
+frontend/src/hooks/usePairing.ts:41:	const pairingTicketRef = useRef<string | null>(null)
+frontend/src/hooks/usePairing.ts:46:		pairingTicketRef.current = pairingTicket
+frontend/src/hooks/usePairing.ts:47:	}, [pairingTicket])
+frontend/src/hooks/usePairing.ts:72:				// handshake, so the ticket is no longer valid.
+frontend/src/hooks/usePairing.ts:73:				if (pairingTicketRef.current != null) {
+frontend/src/hooks/usePairing.ts:74:					setPairingTicket(null)
+frontend/src/hooks/usePairing.ts:87:				setPairingTicket(null)
+frontend/src/hooks/usePairing.ts:124:								t('common:sender.pairedDevices.unknownPeer'),
+frontend/src/hooks/usePairing.ts:155:			const ticket = await startPairingHost({ ttlSecs: PAIRING_HOST_TTL_SECS })
+frontend/src/hooks/usePairing.ts:156:			setPairingTicket(ticket)
+frontend/src/hooks/usePairing.ts:164:			return ticket
+frontend/src/hooks/usePairing.ts:171:		setPairingTicket(null)
+frontend/src/hooks/usePairing.ts:177:		async (ticket: string) => {
+frontend/src/hooks/usePairing.ts:181:				await joinPairing(ticket.trim())
+frontend/src/hooks/usePairing.ts:223:		pairingTicket,
+frontend/src/hooks/useReceiver.ts:25:import { useReceiverActionsStore } from '@/store/receiver-actions-store'
+frontend/src/hooks/useReceiver.ts:30:import { ticketFromReceiveLink } from '../lib/receive-link'
+frontend/src/hooks/useReceiver.ts:33:	TicketPreviewMetadata,
+frontend/src/hooks/useReceiver.ts:91:export interface UseReceiverReturn {
+frontend/src/hooks/useReceiver.ts:92:	ticket: string
+frontend/src/hooks/useReceiver.ts:100:	previewMetadata: TicketPreviewMetadata | null
+frontend/src/hooks/useReceiver.ts:106:	handleTicketChange: (ticket: string) => void
+frontend/src/hooks/useReceiver.ts:115:export function useReceiver(): UseReceiverReturn {
+frontend/src/hooks/useReceiver.ts:117:	const [ticket, setTicket] = useState('')
+frontend/src/hooks/useReceiver.ts:142:		useState<TicketPreviewMetadata | null>(null)
+frontend/src/hooks/useReceiver.ts:169:	const previewMetadataRef = useRef<TicketPreviewMetadata | null>(null)
+frontend/src/hooks/useReceiver.ts:249:		const trimmed = ticket.trim()
+frontend/src/hooks/useReceiver.ts:265:					'fetch_ticket_metadata',
+frontend/src/hooks/useReceiver.ts:267:						ticket: trimmed,
+frontend/src/hooks/useReceiver.ts:296:				console.warn('Failed to fetch ticket preview metadata:', error)
+frontend/src/hooks/useReceiver.ts:309:	}, [ticket, isReceiving])
+frontend/src/hooks/useReceiver.ts:410:						t('common:receiver.downloadFallbackTitle'),
+frontend/src/hooks/useReceiver.ts:412:							? t('common:receiver.downloadFallbackSafDescription', {
+frontend/src/hooks/useReceiver.ts:415:							: t('common:receiver.downloadFallbackDescription', {
+frontend/src/hooks/useReceiver.ts:474:							? `${preview}\n${t('common:receiver.conflictsMore', {
+frontend/src/hooks/useReceiver.ts:502:				let displayName = t('common:receiver.downloadedFile')
+frontend/src/hooks/useReceiver.ts:552:						t('common:receiver.downloadCompletedWithConflicts'),
+frontend/src/hooks/useReceiver.ts:560:					title: t('common:receiver.downloadCompleted'),
+frontend/src/hooks/useReceiver.ts:578:	const handleTicketChange = useCallback((newTicket: string) => {
+frontend/src/hooks/useReceiver.ts:579:		const fromLink = ticketFromReceiveLink(newTicket)
+frontend/src/hooks/useReceiver.ts:580:		setTicket(fromLink ?? newTicket)
+frontend/src/hooks/useReceiver.ts:621:	const receiveWithTicket = useCallback(
+frontend/src/hooks/useReceiver.ts:622:		async (ticketValue: string) => {
+frontend/src/hooks/useReceiver.ts:623:			if (!ticketValue.trim()) return
+frontend/src/hooks/useReceiver.ts:658:					ticket: ticketValue.trim(),
+frontend/src/hooks/useReceiver.ts:695:		await receiveWithTicket(ticket)
+frontend/src/hooks/useReceiver.ts:702:					t('common:receiver.receiveBusyTitle'),
+frontend/src/hooks/useReceiver.ts:703:					t('common:receiver.receiveBusyDescription'),
+frontend/src/hooks/useReceiver.ts:711:			const preview: TicketPreviewMetadata = {
+frontend/src/hooks/useReceiver.ts:712:				fileName: invite.sender_name,
+frontend/src/hooks/useReceiver.ts:718:			setTicket(invite.blob_ticket)
+frontend/src/hooks/useReceiver.ts:725:			await receiveWithTicket(invite.blob_ticket)
+frontend/src/hooks/useReceiver.ts:727:		[isReceiving, isTransporting, receiveWithTicket, showAlert, t]
+frontend/src/hooks/useReceiver.ts:730:	const registerAcceptPairedInvite = useReceiverActionsStore(
+frontend/src/hooks/useReceiver.ts:733:	const registerBrowseSaveFolder = useReceiverActionsStore(
+frontend/src/hooks/useReceiver.ts:736:	const setReceiverSavePath = useReceiverActionsStore(
+frontend/src/hooks/useReceiver.ts:737:		(state) => state.setReceiverSavePath
+frontend/src/hooks/useReceiver.ts:751:		setReceiverSavePath(savePath)
+frontend/src/hooks/useReceiver.ts:752:	}, [savePath, setReceiverSavePath])
+frontend/src/hooks/useReceiver.ts:765:		setTicket('')
+frontend/src/hooks/useReceiver.ts:840:		ticket,
+frontend/src/hooks/useReceiver.ts:853:		handleTicketChange,
+frontend/src/routes/index.tsx:9:import { Receiver } from '@/components/receiver/Receiver'
+frontend/src/routes/index.tsx:10:import { useReceiverContext } from '@/components/receiver/ReceiverProvider'
+frontend/src/routes/index.tsx:11:import { Sender } from '@/components/sender/Sender'
+frontend/src/routes/index.tsx:16:import { ticketFromReceiveLink } from '@/lib/receive-link'
+frontend/src/routes/index.tsx:18:import { useSenderStore } from '@/store/sender-store'
+frontend/src/routes/index.tsx:27:	const { handleTicketChange } = useReceiverContext()
+frontend/src/routes/index.tsx:30:	const setSelectedPath = useSenderStore((state) => state.setSelectedPath)
+frontend/src/routes/index.tsx:31:	const setPathType = useSenderStore((state) => state.setPathType)
+frontend/src/routes/index.tsx:39:			const ticket = ticketFromReceiveLink(url)
+frontend/src/routes/index.tsx:40:			if (!ticket) return
+frontend/src/routes/index.tsx:41:			handleTicketChange(ticket)
+frontend/src/routes/index.tsx:49:	}, [handleTicketChange])
+frontend/src/routes/index.tsx:134:								<Sender onTransferStateChange={setIsSharing} />
+frontend/src/routes/index.tsx:141:								<Receiver onTransferStateChange={setIsReceiving} />
+frontend/src/store/pairing-data-store.ts:5:	getPairingTicket,
+frontend/src/store/pairing-data-store.ts:70:				getPairingTicket().catch((error) => {
+frontend/src/store/pairing-data-store.ts:71:					console.error('Failed to load pairing ticket:', error)
+frontend/src/store/pairing-data-store.ts:105: * paired sender gets misrouted to the Nearby fingerprint dialog.
+frontend/src/store/receiver-actions-store.ts:4:type ReceiverActionsState = {
+frontend/src/store/receiver-actions-store.ts:12:	setReceiverSavePath: (path: string) => void
+frontend/src/store/receiver-actions-store.ts:15:export const useReceiverActionsStore = create<ReceiverActionsState>((set) => ({
+frontend/src/store/receiver-actions-store.ts:21:	setReceiverSavePath: (path) => set({ savePath: path }),
+frontend/src/store/sender-store.ts:6:export type SenderViewState = 'IDLE' | 'SHARING' | 'TRANSPORTING' | 'SUCCESS'
+frontend/src/store/sender-store.ts:8:export interface SenderStore {
+frontend/src/store/sender-store.ts:10:	viewState: SenderViewState
+frontend/src/store/sender-store.ts:13:	ticket: string | null
+frontend/src/store/sender-store.ts:29:	setViewState: (state: SenderViewState) => void
+frontend/src/store/sender-store.ts:30:	setTicket: (ticket: string | null) => void
+frontend/src/store/sender-store.ts:53:export const useSenderStore = create<SenderStore>()((set) => ({
+frontend/src/store/sender-store.ts:56:	ticket: null,
+frontend/src/store/sender-store.ts:78:	setTicket: (ticket) => set({ ticket }),
+frontend/src/store/sender-store.ts:144:			ticket: null,
+frontend/src/store/nearby-verification-store.ts:11:	/** Open the sender-side code dialog for a peer we just reached. */
+frontend/src/store/nearby-verification-store.ts:18: * Drives the sender's verification-code dialog. A store rather than local state
+frontend/src/types/receiver.ts:2:import type { TicketPreviewMetadata } from './transfer'
+frontend/src/types/receiver.ts:4:export interface ReceiverState {
+frontend/src/types/receiver.ts:5:	ticket: string
+frontend/src/types/receiver.ts:10:export interface TicketInputProps {
+frontend/src/types/receiver.ts:11:	ticket: string
+frontend/src/types/receiver.ts:13:	previewMetadata: TicketPreviewMetadata | null
+frontend/src/types/receiver.ts:15:	onTicketChange: (ticket: string) => void
+frontend/src/types/sender.ts:7:	ticket: string | null
+frontend/src/types/sender.ts:18:export interface SenderState extends SharingState, CopyState {
+frontend/src/types/sender.ts:36:	ticket: string | null
+frontend/src/types/sender.ts:49:	onCopyTicket: () => Promise<void>
+frontend/src/types/transfer.ts:6:	/** Receiver only: time spent writing the files out to disk after transfer. */
+frontend/src/types/transfer.ts:29:export interface TicketPreviewMetadata {
+frontend/src/types/transfer.ts:35:	items?: TicketPreviewItem[]
+frontend/src/types/transfer.ts:38:export interface TicketPreviewItem {
+frontend/src/wasm/wasm-bridge-parity.ts:25:	Accepts<StubMod['fetch_ticket_metadata'], RealMod['fetch_ticket_metadata']>
+frontend/src/wasm/wasm-bridge-parity.ts:51:	Returns<StubMod['fetch_ticket_metadata'], RealMod['fetch_ticket_metadata']>
+frontend/src/wasm/pkg/wasm_bridge.d.ts:55:    readonly ticket: string;
+frontend/src/wasm/pkg/wasm_bridge.d.ts:59: * Fetch sender metadata JSON for a ticket (no file download).
+frontend/src/wasm/pkg/wasm_bridge.d.ts:61:export function fetch_ticket_metadata(ticket: string, relay_json?: string | null): Promise<string>;
+frontend/src/wasm/pkg/wasm_bridge.d.ts:71: * Download a ticket into memory (single file or folder collection).
+frontend/src/wasm/pkg/wasm_bridge.d.ts:73:export function receive_file(ticket: string, relay_json?: string | null): Promise<WasmReceiveFileResult>;
+frontend/src/wasm/pkg/wasm_bridge.d.ts:76: * Share a single in-memory file (relay-only ticket).
+frontend/src/wasm/pkg/wasm_bridge.d.ts:81: * Share one or more in-memory files or folders (relay-only ticket).
+frontend/src/wasm/pkg/wasm_bridge.d.ts:116:    readonly fetch_ticket_metadata: (a: number, b: number, c: number, d: number) => any;
+frontend/src/wasm/pkg/wasm_bridge.d.ts:133:    readonly wasmsendresult_ticket: (a: number) => [number, number];
+frontend/src/wasm/wasm-bridge-stub.ts:9:	readonly ticket: string
+frontend/src/wasm/wasm-bridge-stub.ts:54:export function fetch_ticket_metadata(
+frontend/src/wasm/wasm-bridge-stub.ts:55:	_ticket: string,
+frontend/src/wasm/wasm-bridge-stub.ts:62:	_ticket: string,
+frontend/src/lib/platform-api.ts:8:	getWebSharingTicket,
+frontend/src/lib/platform-api.ts:9:	wasmFetchTicketMetadata,
+frontend/src/lib/platform-api.ts:77:		case 'fetch_ticket_metadata': {
+frontend/src/lib/platform-api.ts:78:			const ticket = String(args?.ticket ?? '').trim()
+frontend/src/lib/platform-api.ts:79:			if (!ticket) {
+frontend/src/lib/platform-api.ts:80:				throw new Error('Ticket is required')
+frontend/src/lib/platform-api.ts:82:			const json = await wasmFetchTicketMetadata(ticket, relayFromArgs(args))
+frontend/src/lib/platform-api.ts:97:			const ticket = await wasmSendItems(
+frontend/src/lib/platform-api.ts:104:			return ticket as T
+frontend/src/lib/platform-api.ts:107:			const ticket = String(args?.ticket ?? '').trim()
+frontend/src/lib/platform-api.ts:108:			if (!ticket) {
+frontend/src/lib/platform-api.ts:109:				throw new Error('Ticket is required')
+frontend/src/lib/platform-api.ts:113:				ticket,
+frontend/src/lib/platform-api.ts:169:		case 'fetch_ticket_metadata':
+frontend/src/lib/platform-api.ts:227:			return getWebSharingTicket() as T
+frontend/src/lib/platform-api.ts:238:		case 'get_pairing_ticket':
+frontend/src/lib/transfer-history.ts:43:	/** Receiver only: time spent writing the files out to disk. */
+frontend/src/lib/wasm-bridge-client.ts:19:let currentTicket: string | null = null
+frontend/src/lib/wasm-bridge-client.ts:49:export function getWebSharingTicket(): string | null {
+frontend/src/lib/wasm-bridge-client.ts:50:	return currentTicket
+frontend/src/lib/wasm-bridge-client.ts:66:	currentTicket = result.ticket
+frontend/src/lib/wasm-bridge-client.ts:67:	return result.ticket
+frontend/src/lib/wasm-bridge-client.ts:85:	currentTicket = result.ticket
+frontend/src/lib/wasm-bridge-client.ts:86:	return result.ticket
+frontend/src/lib/wasm-bridge-client.ts:92:	currentTicket = null
+frontend/src/lib/wasm-bridge-client.ts:95:export async function wasmFetchTicketMetadata(
+frontend/src/lib/wasm-bridge-client.ts:96:	ticket: string,
+frontend/src/lib/wasm-bridge-client.ts:100:	return wasm.fetch_ticket_metadata(ticket, relayJson(relay))
+frontend/src/lib/wasm-bridge-client.ts:104:	ticket: string,
+frontend/src/lib/wasm-bridge-client.ts:108:	const result = await wasm.receive_file(ticket, relayJson(relay))
+frontend/src/lib/invite-notification.ts:20:const UNKNOWN_PEER = 'common:sender.pairedDevices.unknownPeer'
+frontend/src/lib/invite-notification.ts:61:					sender: name(payload.sender_name, t),
+frontend/src/lib/invite-notification.ts:75:				title: t(titleKey, { sender: name(payload.sender_name, t) }),
+frontend/src/lib/invite-notification.ts:89:					sender: name(payload.display_name, t),
+frontend/src/lib/receive-link.ts:2:	ticket: string,
+frontend/src/lib/receive-link.ts:6:	url.searchParams.set('ticket', ticket)
+frontend/src/lib/receive-link.ts:15:function ticketFromReceiveUrl(value: string): string | null {
+frontend/src/lib/receive-link.ts:20:		const ticket = url.searchParams.get('ticket')?.trim()
+frontend/src/lib/receive-link.ts:21:		return ticket || null
+frontend/src/lib/receive-link.ts:27:export function ticketFromReceiveLink(value: string): string | null {
+frontend/src/lib/receive-link.ts:29:	const direct = ticketFromReceiveUrl(trimmed)
+frontend/src/lib/receive-link.ts:37:		const ticket = ticketFromReceiveUrl(candidate)
+frontend/src/lib/receive-link.ts:38:		if (ticket) return ticket
+frontend/src/lib/receive-link.test.ts:6:	ticketFromReceiveLink,
+frontend/src/lib/receive-link.test.ts:10:	it('round-trips an opaque ticket through the public receive URL', () => {
+frontend/src/lib/receive-link.test.ts:11:		const ticket = 'blob-ticket/with + symbols'
+frontend/src/lib/receive-link.test.ts:12:		const link = buildReceiveLink(ticket)
+frontend/src/lib/receive-link.test.ts:16:			'https://app.dashbeam.net/receive?ticket=blob-ticket%2Fwith+%2B+symbols'
+frontend/src/lib/receive-link.test.ts:18:		assert.equal(ticketFromReceiveLink(link), ticket)
+frontend/src/lib/receive-link.test.ts:23:			buildReceiveLink('ticket', 'http://localhost:1420'),
+frontend/src/lib/receive-link.test.ts:24:			'http://localhost:1420/receive?ticket=ticket'
+frontend/src/lib/receive-link.test.ts:32:				'https://app.dashbeam.net/receive?ticket=abc'
+frontend/src/lib/receive-link.test.ts:34:			'Private transfer - Sent with DashBeam\n\nhttps://app.dashbeam.net/receive?ticket=abc'
+frontend/src/lib/receive-link.test.ts:38:	it('extracts a ticket from a soft-brand share paste', () => {
+frontend/src/lib/receive-link.test.ts:39:		const ticket = 'blobabc'
+frontend/src/lib/receive-link.test.ts:42:			buildReceiveLink(ticket)
+frontend/src/lib/receive-link.test.ts:44:		assert.equal(ticketFromReceiveLink(message), ticket)
+frontend/src/lib/receive-link.test.ts:48:		assert.equal(ticketFromReceiveLink('https://app.dashbeam.net/'), null)
+frontend/src/lib/receive-link.test.ts:50:			ticketFromReceiveLink(
+frontend/src/lib/receive-link.test.ts:51:				'https://app.dashbeam.net/settings?ticket=should-not-load'
+frontend/src/lib/receive-link.test.ts:55:		assert.equal(ticketFromReceiveLink('not a URL'), null)
+frontend/src/lib/pairing-api.ts:42:	blob_ticket: string
+frontend/src/lib/pairing-api.ts:45:	sender_name: string
+frontend/src/lib/pairing-api.ts:105:export async function getPairingTicket(): Promise<string | null> {
+frontend/src/lib/pairing-api.ts:107:	return invoke<string>('get_pairing_ticket')
+frontend/src/lib/pairing-api.ts:125:export async function joinPairing(ticket: string): Promise<void> {
+frontend/src/lib/pairing-api.ts:129:	await invoke('join_pairing', { ticket })
+frontend/src/lib/pairing-api.ts:155:	blobTicket: string,
+frontend/src/lib/pairing-api.ts:162:		blobTicket,
+frontend/src/lib/pairing-api.ts:219: * Delivers the active share ticket to a Nearby (unpaired LAN) device.
+frontend/src/lib/pairing-api.ts:220: * Same ticket reuse as `invitePairedDevice` — no separate share is minted.
+frontend/src/lib/pairing-api.ts:224:	blobTicket: string,
+frontend/src/lib/pairing-api.ts:231:		blobTicket,
+frontend/src/lib/pairing-api.ts:238:/** Asks a Nearby LAN device to pair — no file ticket. */

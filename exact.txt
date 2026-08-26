@@ -1,0 +1,288 @@
+
+	const removeSelectedPath = (path: string) => {
+		removeSelectedPathFromStore(path)
+		const remaining = useSenderStore.getState().selectedPaths
+
+		if (remaining.length === 0) {
+			setPathType(null)
+			return
+		}
+
+		if (remaining.length === 1) {
+			invoke<string>('check_path_type', { path: remaining[0] })
+				.then((type) => {
+					setPathType(type as 'file' | 'directory')
+				})
+				.catch((error) => {
+					console.error('Failed to check path type:', error)
+					setPathType(null)
+				})
+			return
+		}
+
+		setPathType(null)
+	}
+
+	const startSharing = async () => {
+		if (!selectedPaths.length) {
+			console.warn(
+				'[useSender] startSharing: no selectedPaths, returning early'
+			)
+			return
+		}
+
+		try {
+			setViewState('IDLE')
+			setTransferMetadata(null)
+			setTransferProgress(null)
+			setActiveConnectionCount(0)
+			transferStartTimeRef.current = null
+			wasManuallyStoppedRef.current = false
+			latestProgressRef.current = null
+
+			setIsLoading(true)
+			const result = await invoke<string>('send_items', {
+				paths: selectedPaths,
+				relay: getRelayConfigArg(),
+				discovery: getDiscoveryConfigArg(),
+			})
+			setTicket(result)
+			setViewState('SHARING')
+		} catch (error) {
+			console.error('[useSender] startSharing: failed:', error)
+			showAlert(
+				t('common:errors.sharingFailed'),
+				isWebPreviewError(error)
+					? getWebPreviewErrorMessage(
+							error,
+							t('common:webPreview.transferUnavailable')
+						)
+					: `${t('common:errors.sharingFailedDesc')}: ${error}`,
+				'error'
+			)
+		} finally {
+			setIsLoading(false)
+		}
+	}
+
+	const stopSharing = async () => {
+		// Always disable broadcast mode when stopping
+		setIsBroadcastMode(false)
+
+
+	useEffect(() => {
+		const seq = ++previewRequestSeqRef.current
+
+		if (isReceiving) {
+			setIsPreviewLoading(false)
+			return
+		}
+
+		const trimmed = ticket.trim()
+		if (!trimmed) {
+			setPreviewMetadata(null)
+			previewMetadataRef.current = null
+			setIsPreviewLoading(false)
+			return
+		}
+
+		setIsPreviewLoading(true)
+		// Clear stale preview while typing/fetching
+		setPreviewMetadata(null)
+		previewMetadataRef.current = null
+
+		const timer = window.setTimeout(async () => {
+			try {
+				const payload = await invoke<BackendFileMetadata>(
+					'fetch_ticket_metadata',
+					{
+						ticket: trimmed,
+						relay: getRelayConfigArg(),
+						discovery: getDiscoveryConfigArg(),
+					}
+				)
+
+				if (previewRequestSeqRef.current !== seq) {
+					return
+				}
+
+				const metadata = {
+					fileName: payload.file_name,
+					itemCount: payload.item_count,
+					size: payload.size,
+					thumbnail: payload.thumbnail ?? undefined,
+					mimeType: payload.mime_type ?? undefined,
+					items: payload.items?.map((item) => ({
+						fileName: item.file_name,
+						size: item.size,
+						thumbnail: item.thumbnail ?? undefined,
+						mimeType: item.mime_type ?? undefined,
+					})),
+				}
+				setPreviewMetadata(metadata)
+				previewMetadataRef.current = metadata
+			} catch (error) {
+				if (previewRequestSeqRef.current !== seq) {
+					return
+				}
+				console.warn('Failed to fetch ticket preview metadata:', error)
+				setPreviewMetadata(null)
+				previewMetadataRef.current = null
+			} finally {
+				if (previewRequestSeqRef.current === seq) {
+					setIsPreviewLoading(false)
+				}
+			}
+		}, 300)
+
+		return () => {
+			window.clearTimeout(timer)
+		}
+	}, [ticket, isReceiving])
+
+	const showAlert = useCallback(
+		(title: string, description: string, type: AlertType = 'info') => {
+			setAlertDialog({ isOpen: true, title, description, type })
+		},
+		[]
+		return () => {
+			disposed = true
+			unlistenFns.forEach((unlisten) => {
+				unlisten()
+			})
+		}
+	}, [t, showAlert])
+
+	const handleTicketChange = useCallback((newTicket: string) => {
+		const fromLink = ticketFromReceiveLink(newTicket)
+		setTicket(fromLink ?? newTicket)
+	}, [])
+
+	const handleBrowseFolder = useCallback(async () => {
+		if (isReceiving) return
+		try {
+			let selected: string | null
+			if (IS_ANDROID) {
+				const response = await selectDownloadFolder()
+				if (!response) return
+				selected = response.path
+				setDownloadsPath(selected)
+				setDownloadsUri(response.uri)
+			} else if (IS_WEB) {
+				if (!supportsWebSaveLocationPicker()) {
+					return
+				}
+				selected = await pickDownloadDirectory()
+			} else {
+				const dialogSelection = await openDialog({
+					multiple: false,
+					directory: true,
+				})
+				selected = Array.isArray(dialogSelection)
+					? (dialogSelection[0] ?? null)
+					: dialogSelection
+			}
+
+			if (selected) {
+				setSavePath(selected)
+			}
+		} catch (error) {
+			console.error('Failed to open folder dialog:', error)
+			showAlert(
+				t('common:errors.folderDialogFailed'),
+				`${t('common:errors.folderDialogFailedDesc')}: ${error}`,
+				'error'
+			)
+		}
+	}, [isReceiving, setDownloadsPath, setDownloadsUri, showAlert, t])
+
+	const receiveWithTicket = useCallback(
+		async (ticketValue: string) => {
+			if (!ticketValue.trim()) return
+
+			try {
+				if (transferItemCountRef.current == null) {
+					transferItemCountRef.current =
+						previewMetadataRef.current?.itemCount ?? previewMetadata?.itemCount
+				}
+				previewRequestSeqRef.current += 1
+				transferSeqRef.current += 1
+				setIsReceiving(true)
+				setIsTransporting(false)
+				setIsCompleted(false)
+				setTransferMetadata(null)
+				setTransferProgress(null)
+				setTransferStartTime(null)
+				setIsPreviewLoading(false)
+				pendingConflictNoticeRef.current = null
+				folderOpenTriggeredRef.current = false
+				androidMediaStoreUrisRef.current = []
+				androidMediaStorePathRef.current = ''
+				// Every Android receive ends in an export, so the target is
+				// pending from the moment the transfer starts.
+				setIsExportPending(IS_ANDROID)
+				androidOpenUriRef.current = IS_ANDROID
+					? downloadsUriRef.current.trim()
+					: ''
+
+				let outputPath = savePathRef.current.trim()
+				if (!outputPath && !IS_WEB && !IS_ANDROID) {
+					outputPath = await downloadDir()
+					setSavePath(outputPath)
+					savePathRef.current = outputPath
+				}
+
+				await invoke<string>('receive_file', {
+					ticket: ticketValue.trim(),
+					outputPath,
+					treeUri: IS_ANDROID ? downloadsUriRef.current.trim() || null : null,
+					relay: getRelayConfigArg(),
+					discovery: getDiscoveryConfigArg(),
+				})
+			} catch (error) {
+				// A receive that never finished never exports, so nothing is
+				// coming to clear the pending flag.
+				setIsExportPending(false)
+
+				if (
+					String(error) === 'cancelled' ||
+					String(error).endsWith(': cancelled')
+				)
+					return
+
+				console.error('Failed to receive file:', error)
+				showAlert(
+					t('common:errors.receiveFailed'),
+					isWebPreviewError(error)
+						? getWebPreviewErrorMessage(
+								error,
+								t('common:webPreview.transferUnavailable')
+							)
+						: String(error),
+					'error'
+				)
+				setIsReceiving(false)
+				setIsTransporting(false)
+				setIsCompleted(false)
+			}
+		},
+		[previewMetadata, showAlert, t]
+	)
+
+	const handleReceive = async () => {
+		await receiveWithTicket(ticket)
+	}
+
+	const acceptPairedInvite = useCallback(
+		async (invite: PairedInvitePayload) => {
+			if (isReceiving || isTransporting) {
+				showAlert(
+					t('common:receiver.receiveBusyTitle'),
+					t('common:receiver.receiveBusyDescription'),
+					'info'
+				)
+				return
+			}
+
+			useTransferTabStore.getState().requestTab('receive')
+

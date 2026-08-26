@@ -1,0 +1,64 @@
+src-tauri/src/logging.rs:386:                "dashbeam::_events::pairing::nearby_accept",
+src-tauri/src/logging.rs:387:                "dashbeam::_events::pairing::nearby_commit",
+src-tauri/src/logging.rs:389:                // Nearby / mDNS.
+src-tauri/src/logging.rs:390:                "dashbeam::_events::nearby::mdns_advertising",
+src-tauri/src/logging.rs:391:                "dashbeam::_events::nearby::mdns_discovered",
+src-tauri/src/logging.rs:392:                "dashbeam::_events::nearby::mdns_expired",
+src-tauri/src/logging.rs:393:                "dashbeam::_events::nearby::mdns_unavailable",
+src-tauri/src/logging.rs:394:                "dashbeam::_events::nearby::observe",
+src-tauri/src/logging.rs:395:                "dashbeam::_events::nearby::identity",
+src-tauri/src/logging.rs:396:                "dashbeam::_events::nearby::expire",
+src-tauri/src/logging.rs:397:                "dashbeam::_events::nearby::probe_started",
+src-tauri/src/logging.rs:398:                "dashbeam::_events::nearby::probe_failed",
+src-tauri/src/logging.rs:399:                "dashbeam::_events::nearby::discoverability",
+src-tauri/src/logging.rs:400:                // Control plane, shared by pairing and nearby.
+src-tauri/src/history.rs:189:    /// exists, and the only synchronous source of a Nearby device's name.
+src-tauri/src/presence_service.rs:3://! Presence and Nearby visibility ride tokio tasks in the app process, which
+src-tauri/src/commands.rs:8:    build_discovery_mode, download, fetch_metadata, get_relay_status as engine_get_relay_status,
+src-tauri/src/commands.rs:12:    FilePreviewItem, NearbyDevice, NodeService, PairedDevice, PairedDeviceInfo, ReceiveOptions,
+src-tauri/src/commands.rs:24:    build_relay_mode, relay_fallback_policy, DiscoveryConfigArg, RelayConfigArg,
+src-tauri/src/commands.rs:203:    discovery: Option<DiscoveryConfigArg>,
+src-tauri/src/commands.rs:216:    discovery: Option<DiscoveryConfigArg>,
+src-tauri/src/commands.rs:249:        let discovery_mode = build_discovery_mode(discovery)?;
+src-tauri/src/commands.rs:392:    discovery: Option<DiscoveryConfigArg>,
+src-tauri/src/commands.rs:398:    let discovery_mode = build_discovery_mode(discovery)?;
+src-tauri/src/commands.rs:454:    discovery: Option<DiscoveryConfigArg>,
+src-tauri/src/commands.rs:464:    let discovery_mode = build_discovery_mode(discovery)?;
+src-tauri/src/commands.rs:1164:/// Verify reachability of a custom self-hosted discovery (pkarr) server.
+src-tauri/src/commands.rs:1167:    discovery: DiscoveryConfigArg,
+src-tauri/src/commands.rs:1184:/// an `Off` install never registers mDNS even briefly (`DeviceNodeSync`
+src-tauri/src/commands.rs:1233:    let discovery_mode = build_discovery_mode(None)?;
+src-tauri/src/commands.rs:1314:    discovery: Option<DiscoveryConfigArg>,
+src-tauri/src/commands.rs:1329:    let discovery_mode = build_discovery_mode(discovery)?;
+src-tauri/src/commands.rs:1576:pub async fn list_nearby(state: State<'_, AppStateMutex>) -> Result<Vec<NearbyDevice>, String> {
+src-tauri/src/commands.rs:1581:    Ok(node.list_nearby().await)
+src-tauri/src/commands.rs:1612:            target: "dashbeam::_events::nearby::set_discoverability_failed",
+src-tauri/src/commands.rs:1631:pub struct NearbyStatusResponse {
+src-tauri/src/commands.rs:1632:    /// Why LAN discovery is unavailable (mDNS pump failed to start), or
+src-tauri/src/commands.rs:1634:    /// `nearby-unavailable` event can fire during node init, before the
+src-tauri/src/commands.rs:1641:pub async fn nearby_status(
+src-tauri/src/commands.rs:1643:) -> Result<NearbyStatusResponse, String> {
+src-tauri/src/commands.rs:1648:    Ok(NearbyStatusResponse {
+src-tauri/src/commands.rs:1649:        reason: node.nearby_unavailable_reason(),
+src-tauri/src/commands.rs:1653:/// Delivers the caller's active share ticket to a Nearby device over the
+src-tauri/src/commands.rs:1658:pub async fn invite_nearby_device(
+src-tauri/src/commands.rs:1670:    // A Nearby device's name lives only in the discovery cache, and
+src-tauri/src/commands.rs:1671:    // `list_nearby` is async — out of reach of the synchronous emitter path.
+src-tauri/src/commands.rs:1672:    let nearby_peer = node
+src-tauri/src/commands.rs:1673:        .list_nearby()
+src-tauri/src/commands.rs:1687:    note_share_peer(&*state.lock().await, nearby_peer);
+src-tauri/src/commands.rs:1689:        .invite_nearby_device(&endpoint_id, &blob_ticket, file_count, total_size)
+src-tauri/src/commands.rs:1696:/// Asks a Nearby device to pair (no file share). Receiver confirms on name /
+src-tauri/src/commands.rs:1697:/// device type; accept reuses `respond_nearby_invite`.
+src-tauri/src/commands.rs:1700:pub async fn request_nearby_pair(
+src-tauri/src/commands.rs:1709:        .request_nearby_pair(&endpoint_id)
+src-tauri/src/commands.rs:1718:pub async fn respond_nearby_invite(
+src-tauri/src/commands.rs:1729:        node.accept_nearby_invite(&endpoint_id).await
+src-tauri/src/commands.rs:1731:        node.decline_nearby_invite(&endpoint_id, block).await
+src-tauri/src/lib.rs:195:            list_nearby,
+src-tauri/src/lib.rs:197:            nearby_status,
+src-tauri/src/lib.rs:203:            invite_nearby_device,
+src-tauri/src/lib.rs:205:            request_nearby_pair,
+src-tauri/src/lib.rs:207:            respond_nearby_invite,
+src-tauri/src/lib.rs:276:                // Pairing code, Nearby, and remote unpair all land on these
+engine/src/lib.rs:29:    run_share_session, should_answer_identity, should_publish_mdns, should_run_background_presence,

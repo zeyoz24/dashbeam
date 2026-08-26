@@ -1,0 +1,70 @@
+				setIsTransporting(false)
+				setIsCompleted(false)
+				setTransferMetadata(null)
+				setTransferProgress(null)
+				setTransferStartTime(null)
+				setIsPreviewLoading(false)
+				pendingConflictNoticeRef.current = null
+				folderOpenTriggeredRef.current = false
+				androidMediaStoreUrisRef.current = []
+				androidMediaStorePathRef.current = ''
+				// Every Android receive ends in an export, so the target is
+				// pending from the moment the transfer starts.
+				setIsExportPending(IS_ANDROID)
+				androidOpenUriRef.current = IS_ANDROID
+					? downloadsUriRef.current.trim()
+					: ''
+
+				let outputPath = savePathRef.current.trim()
+				if (!outputPath && !IS_WEB && !IS_ANDROID) {
+					outputPath = await downloadDir()
+					setSavePath(outputPath)
+					savePathRef.current = outputPath
+				}
+
+				await invoke<string>('receive_file', {
+					ticket: ticketValue.trim(),
+					outputPath,
+					treeUri: IS_ANDROID ? downloadsUriRef.current.trim() || null : null,
+					relay: getRelayConfigArg(),
+					discovery: getDiscoveryConfigArg(),
+				})
+			} catch (error) {
+				// A receive that never finished never exports, so nothing is
+				// coming to clear the pending flag.
+				setIsExportPending(false)
+
+				if (
+					String(error) === 'cancelled' ||
+					String(error).endsWith(': cancelled')
+				)
+					return
+
+				console.error('Failed to receive file:', error)
+				showAlert(
+					t('common:errors.receiveFailed'),
+					isWebPreviewError(error)
+						? getWebPreviewErrorMessage(
+								error,
+								t('common:webPreview.transferUnavailable')
+							)
+						: String(error),
+					'error'
+				)
+				setIsReceiving(false)
+				setIsTransporting(false)
+				setIsCompleted(false)
+			}
+		},
+		[previewMetadata, showAlert, t]
+	)
+
+	const handleReceive = async () => {
+		await receiveWithTicket(ticket)
+	}
+
+	const acceptPairedInvite = useCallback(
+		async (invite: PairedInvitePayload) => {
+			if (isReceiving || isTransporting) {
+				showAlert(
+					t('common:receiver.receiveBusyTitle'),

@@ -1,0 +1,61 @@
+		if (remaining.length === 1) {
+			invoke<string>('check_path_type', { path: remaining[0] })
+				.then((type) => {
+					setPathType(type as 'file' | 'directory')
+				})
+				.catch((error) => {
+					console.error('Failed to check path type:', error)
+					setPathType(null)
+				})
+			return
+		}
+
+		setPathType(null)
+	}
+
+	const startSharing = async () => {
+		if (!selectedPaths.length) {
+			console.warn(
+				'[useSender] startSharing: no selectedPaths, returning early'
+			)
+			return
+		}
+
+		try {
+			setViewState('IDLE')
+			setTransferMetadata(null)
+			setTransferProgress(null)
+			setActiveConnectionCount(0)
+			transferStartTimeRef.current = null
+			wasManuallyStoppedRef.current = false
+			latestProgressRef.current = null
+
+			setIsLoading(true)
+			const result = await invoke<string>('send_items', {
+				paths: selectedPaths,
+				relay: getRelayConfigArg(),
+				discovery: getDiscoveryConfigArg(),
+			})
+			setTicket(result)
+			setViewState('SHARING')
+		} catch (error) {
+			console.error('[useSender] startSharing: failed:', error)
+			showAlert(
+				t('common:errors.sharingFailed'),
+				isWebPreviewError(error)
+					? getWebPreviewErrorMessage(
+							error,
+							t('common:webPreview.transferUnavailable')
+						)
+					: `${t('common:errors.sharingFailedDesc')}: ${error}`,
+				'error'
+			)
+		} finally {
+			setIsLoading(false)
+		}
+	}
+
+	const stopSharing = async () => {
+		// Always disable broadcast mode when stopping
+		setIsBroadcastMode(false)
+

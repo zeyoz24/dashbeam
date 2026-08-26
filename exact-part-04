@@ -1,0 +1,8 @@
+					t('common:receiver.receiveBusyDescription'),
+					'info'
+				)
+				return
+			}
+
+			useTransferTabStore.getState().requestTab('receive')
+

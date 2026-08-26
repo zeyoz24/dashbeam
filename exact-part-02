@@ -1,0 +1,70 @@
+	}, [ticket, isReceiving])
+
+	const showAlert = useCallback(
+		(title: string, description: string, type: AlertType = 'info') => {
+			setAlertDialog({ isOpen: true, title, description, type })
+		},
+		[]
+		return () => {
+			disposed = true
+			unlistenFns.forEach((unlisten) => {
+				unlisten()
+			})
+		}
+	}, [t, showAlert])
+
+	const handleTicketChange = useCallback((newTicket: string) => {
+		const fromLink = ticketFromReceiveLink(newTicket)
+		setTicket(fromLink ?? newTicket)
+	}, [])
+
+	const handleBrowseFolder = useCallback(async () => {
+		if (isReceiving) return
+		try {
+			let selected: string | null
+			if (IS_ANDROID) {
+				const response = await selectDownloadFolder()
+				if (!response) return
+				selected = response.path
+				setDownloadsPath(selected)
+				setDownloadsUri(response.uri)
+			} else if (IS_WEB) {
+				if (!supportsWebSaveLocationPicker()) {
+					return
+				}
+				selected = await pickDownloadDirectory()
+			} else {
+				const dialogSelection = await openDialog({
+					multiple: false,
+					directory: true,
+				})
+				selected = Array.isArray(dialogSelection)
+					? (dialogSelection[0] ?? null)
+					: dialogSelection
+			}
+
+			if (selected) {
+				setSavePath(selected)
+			}
+		} catch (error) {
+			console.error('Failed to open folder dialog:', error)
+			showAlert(
+				t('common:errors.folderDialogFailed'),
+				`${t('common:errors.folderDialogFailedDesc')}: ${error}`,
+				'error'
+			)
+		}
+	}, [isReceiving, setDownloadsPath, setDownloadsUri, showAlert, t])
+
+	const receiveWithTicket = useCallback(
+		async (ticketValue: string) => {
+			if (!ticketValue.trim()) return
+
+			try {
+				if (transferItemCountRef.current == null) {
+					transferItemCountRef.current =
+						previewMetadataRef.current?.itemCount ?? previewMetadata?.itemCount
+				}
+				previewRequestSeqRef.current += 1
+				transferSeqRef.current += 1
+				setIsReceiving(true)

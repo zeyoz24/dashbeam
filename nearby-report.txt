@@ -1,0 +1,29 @@
+engine/native/src/node.rs:31:use crate::nearby::{NearbyDevice, NearbyRegistry, ObserveOutcome};
+engine/native/src/node.rs:1205:    pub async fn invite_nearby_device(
+engine/native/src/node.rs:1665:    pub async fn list_nearby(&self) -> Vec<NearbyDevice> {
+engine/native/src/nearby.rs:15:pub struct NearbyDevice {
+engine/native/src/nearby.rs:57:    device: NearbyDevice,
+engine/native/src/nearby.rs:119:                device: NearbyDevice {
+engine/native/src/nearby.rs:182:    pub fn list(&self) -> Vec<NearbyDevice> {
+engine/native/src/lib.rs:32:pub use nearby::{NearbyDevice, NearbyRegistry, ObserveOutcome};
+engine/tests/common/mod.rs:4:    DeviceInfo, Discoverability, DiscoveryModeOption, EventEmitter, NearbyDevice, NodeService,
+engine/tests/common/mod.rs:282:) -> Option<NearbyDevice> {
+engine/tests/common/mod.rs:287:            .list_nearby()
+engine/tests/common/mod.rs:308:            .list_nearby()
+engine/tests/test_nearby.rs:262:            node.list_nearby().await.is_empty(),
+engine/tests/test_nearby.rs:331:            node.list_nearby().await.is_empty(),
+engine/tests/test_nearby.rs:402:        .invite_nearby_device(&bob.endpoint_id(), "test-blob-ticket", 1, 12)
+engine/tests/test_nearby.rs:455:            .list_nearby()
+engine/tests/test_nearby.rs:490:        .invite_nearby_device(&bob.endpoint_id(), "test-blob-ticket", 1, 4)
+engine/tests/test_nearby.rs:536:        .invite_nearby_device(&bob.endpoint_id(), "test-blob-ticket", 1, 1)
+engine/tests/test_nearby.rs:544:        !bob.list_nearby()
+engine/tests/test_nearby.rs:566:        .invite_nearby_device(&bob.endpoint_id(), "test-blob-ticket", 1, 5)
+src-tauri/src/commands.rs:12:    FilePreviewItem, NearbyDevice, NodeService, PairedDevice, PairedDeviceInfo, ReceiveOptions,
+src-tauri/src/commands.rs:1576:pub async fn list_nearby(state: State<'_, AppStateMutex>) -> Result<Vec<NearbyDevice>, String> {
+src-tauri/src/commands.rs:1581:    Ok(node.list_nearby().await)
+src-tauri/src/commands.rs:1658:pub async fn invite_nearby_device(
+src-tauri/src/commands.rs:1671:    // `list_nearby` is async — out of reach of the synchronous emitter path.
+src-tauri/src/commands.rs:1673:        .list_nearby()
+src-tauri/src/commands.rs:1689:        .invite_nearby_device(&endpoint_id, &blob_ticket, file_count, total_size)
+src-tauri/src/lib.rs:195:            list_nearby,
+src-tauri/src/lib.rs:203:            invite_nearby_device,

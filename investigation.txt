@@ -1,0 +1,203 @@
+=== FILES ===
+frontend/src/hooks/useSender.ts
+frontend/src/hooks/useReceiver.ts
+frontend/src/store/receiver-actions-store.ts
+frontend/src/store/sender-store.ts
+frontend/src/types/receiver.ts
+frontend/src/types/sender.ts
+frontend/src/lib/web-send-metadata.ts
+frontend/src/lib/web-send-items.ts
+frontend/src/lib/paired-send-counts.ts
+frontend/src/lib/web-send-metadata.test.ts
+frontend/src/lib/receive-link.ts
+frontend/src/lib/receive-link.test.ts
+frontend/src/lib/web-send-items.test.ts
+frontend/src/lib/receive-save-path.ts
+frontend/src/components/receiver/ReceivingActiveCard.tsx
+frontend/src/components/receiver/TicketInput.tsx
+frontend/src/components/receiver/Receiver.tsx
+frontend/src/components/receiver/ReceiveSaveLocationPicker.tsx
+frontend/src/components/receiver/ReceiverProvider.tsx
+frontend/src/components/sender/Sender.tsx
+=== FRONTEND ===
+frontend/src/hooks/useInviteNotifications.ts:76:					// Without this wait a paired sender's invite briefly looks
+frontend/src/hooks/useSender.ts:28:import { useSenderStore } from '../store/sender-store'
+frontend/src/hooks/useSender.ts:38:export interface UseSenderReturn {
+frontend/src/hooks/useSender.ts:47:	ticket: string | null
+frontend/src/hooks/useSender.ts:77:	copyTicket: () => Promise<void>
+frontend/src/hooks/useSender.ts:83:export function useSender(): UseSenderReturn {
+frontend/src/hooks/useSender.ts:89:		ticket,
+frontend/src/hooks/useSender.ts:101:		setTicket,
+frontend/src/hooks/useSender.ts:116:	} = useSenderStore()
+frontend/src/hooks/useSender.ts:156:		if (!ticket) {
+frontend/src/hooks/useSender.ts:159:	}, [ticket])
+frontend/src/hooks/useSender.ts:263:				const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:278:						const currentViewState = useSenderStore.getState().viewState
+frontend/src/hooks/useSender.ts:293:						const currentViewState = useSenderStore.getState().viewState
+frontend/src/hooks/useSender.ts:313:						const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:341:					const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:443:								'[useSender] transfer-completed: failed to get file size:',
+frontend/src/hooks/useSender.ts:450:							'[useSender] transfer-completed: no path available to set metadata',
+frontend/src/hooks/useSender.ts:472:				const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:538:						'[useSender] transfer-failed: NO PATH AVAILABLE - this should not happen due to guards!'
+frontend/src/hooks/useSender.ts:594:		const nextSelectedCount = useSenderStore.getState().selectedPaths.length
+frontend/src/hooks/useSender.ts:633:		const remaining = useSenderStore.getState().selectedPaths
+frontend/src/hooks/useSender.ts:658:				'[useSender] startSharing: no selectedPaths, returning early'
+frontend/src/hooks/useSender.ts:678:			setTicket(result)
+frontend/src/hooks/useSender.ts:681:			console.error('[useSender] startSharing: failed:', error)
+frontend/src/hooks/useSender.ts:708:			const storeState = useSenderStore.getState()
+frontend/src/hooks/useSender.ts:778:			setTicket(null)
+frontend/src/hooks/useSender.ts:813:		if (!ticket) {
+frontend/src/hooks/useSender.ts:836:			device?.display_name ?? t('common:sender.pairedDevices.unknownPeer')
+frontend/src/hooks/useSender.ts:847:				ticket,
+frontend/src/hooks/useSender.ts:854:					title: t('common:sender.pairedDevices.inviteSentTo', {
+frontend/src/hooks/useSender.ts:857:					description: t('common:sender.pairedDevices.inviteSentDesc'),
+frontend/src/hooks/useSender.ts:864:				title: t('common:sender.pairedDevices.inviteFailed'),
+frontend/src/hooks/useSender.ts:865:				description: t('common:sender.pairedDevices.deviceUnreachable'),
+frontend/src/hooks/useSender.ts:873:				title: t('common:sender.pairedDevices.inviteFailed'),
+frontend/src/hooks/useSender.ts:883:		if (!ticket) {
+frontend/src/hooks/useSender.ts:909:				: t('common:sender.pairedDevices.unknownPeer'))
+frontend/src/hooks/useSender.ts:916:				ticket,
+frontend/src/hooks/useSender.ts:923:					title: t('common:sender.pairedDevices.inviteSentTo', {
+frontend/src/hooks/useSender.ts:926:					description: t('common:sender.pairedDevices.inviteSentDesc'),
+frontend/src/hooks/useSender.ts:929:				// The receiver is being asked to check this code against our
+frontend/src/hooks/useSender.ts:939:				title: t('common:sender.pairedDevices.inviteFailed'),
+frontend/src/hooks/useSender.ts:948:				title: t('common:sender.pairedDevices.inviteFailed'),
+frontend/src/hooks/useSender.ts:957:	const copyTicket = async () => {
+frontend/src/hooks/useSender.ts:958:		if (ticket) {
+frontend/src/hooks/useSender.ts:960:				await copyTextToClipboard(ticket)
+frontend/src/hooks/useSender.ts:964:				console.error('Failed to copy ticket:', error)
+frontend/src/hooks/useSender.ts:984:		ticket,
+frontend/src/hooks/useSender.ts:1008:		copyTicket,
+frontend/src/hooks/usePairing.ts:34:	const [pairingTicket, setPairingTicket] = useState<string | null>(null)
+frontend/src/hooks/usePairing.ts:41:	const pairingTicketRef = useRef<string | null>(null)
+frontend/src/hooks/usePairing.ts:46:		pairingTicketRef.current = pairingTicket
+frontend/src/hooks/usePairing.ts:47:	}, [pairingTicket])
+frontend/src/hooks/usePairing.ts:72:				// handshake, so the ticket is no longer valid.
+frontend/src/hooks/usePairing.ts:73:				if (pairingTicketRef.current != null) {
+frontend/src/hooks/usePairing.ts:74:					setPairingTicket(null)
+frontend/src/hooks/usePairing.ts:87:				setPairingTicket(null)
+frontend/src/hooks/usePairing.ts:124:								t('common:sender.pairedDevices.unknownPeer'),
+frontend/src/hooks/usePairing.ts:155:			const ticket = await startPairingHost({ ttlSecs: PAIRING_HOST_TTL_SECS })
+frontend/src/hooks/usePairing.ts:156:			setPairingTicket(ticket)
+frontend/src/hooks/usePairing.ts:164:			return ticket
+frontend/src/hooks/usePairing.ts:171:		setPairingTicket(null)
+frontend/src/hooks/usePairing.ts:177:		async (ticket: string) => {
+frontend/src/hooks/usePairing.ts:181:				await joinPairing(ticket.trim())
+frontend/src/hooks/usePairing.ts:223:		pairingTicket,
+frontend/src/hooks/useReceiver.ts:25:import { useReceiverActionsStore } from '@/store/receiver-actions-store'
+frontend/src/hooks/useReceiver.ts:30:import { ticketFromReceiveLink } from '../lib/receive-link'
+frontend/src/hooks/useReceiver.ts:33:	TicketPreviewMetadata,
+frontend/src/hooks/useReceiver.ts:91:export interface UseReceiverReturn {
+frontend/src/hooks/useReceiver.ts:92:	ticket: string
+frontend/src/hooks/useReceiver.ts:100:	previewMetadata: TicketPreviewMetadata | null
+frontend/src/hooks/useReceiver.ts:106:	handleTicketChange: (ticket: string) => void
+frontend/src/hooks/useReceiver.ts:115:export function useReceiver(): UseReceiverReturn {
+frontend/src/hooks/useReceiver.ts:117:	const [ticket, setTicket] = useState('')
+frontend/src/hooks/useReceiver.ts:142:		useState<TicketPreviewMetadata | null>(null)
+frontend/src/hooks/useReceiver.ts:169:	const previewMetadataRef = useRef<TicketPreviewMetadata | null>(null)
+frontend/src/hooks/useReceiver.ts:249:		const trimmed = ticket.trim()
+frontend/src/hooks/useReceiver.ts:265:					'fetch_ticket_metadata',
+frontend/src/hooks/useReceiver.ts:267:						ticket: trimmed,
+frontend/src/hooks/useReceiver.ts:296:				console.warn('Failed to fetch ticket preview metadata:', error)
+=== RUST ===
+src-tauri/src/autostart_portal.rs:40:        .send()
+src-tauri/src/state.rs:2:use engine::{NodeService, SendResult};
+src-tauri/src/state.rs:10:    /// Set when device-node initialization fails (pairing unavailable; send/receive still work).
+src-tauri/src/state.rs:16:    pub current_receive_cancel: Option<tokio::sync::oneshot::Sender<()>>,
+src-tauri/src/state.rs:17:    /// Hash of the receive in flight, so history cannot delete the partial
+src-tauri/src/state.rs:19:    pub current_receive_hash: Option<String>,
+src-tauri/src/state.rs:32:            current_receive_cancel: None,
+src-tauri/src/state.rs:33:            current_receive_hash: None,
+src-tauri/src/state.rs:42:    pub ticket: String,
+src-tauri/src/state.rs:44:    pub send_result: SendResult,
+src-tauri/src/state.rs:52:        ticket: String,
+src-tauri/src/state.rs:54:        send_result: SendResult,
+src-tauri/src/state.rs:58:            ticket,
+src-tauri/src/state.rs:60:            send_result,
+src-tauri/src/state.rs:69:        match tokio::time::timeout(Duration::from_secs(2), self.send_result.router.shutdown()).await
+src-tauri/src/state.rs:80:        let endpoint = self.send_result.router.endpoint();
+src-tauri/src/logging.rs:40:/// internals. These are lib target names, not package names — `sendme-protocol`
+src-tauri/src/logging.rs:41:/// builds lib `protocol`, `sendme-native` builds lib `native`.
+src-tauri/src/history.rs:42:/// What a `transfer-completed` / `receive-completed` payload tells us.
+src-tauri/src/history.rs:47:    /// Receiver only: time spent writing the files out to disk.
+src-tauri/src/history.rs:75:/// What a receive contained, from `receive-file-names` — which arrives just
+src-tauri/src/history.rs:76:/// before completion, unlike the ticket preview the UI fetched earlier.
+src-tauri/src/history.rs:78:pub struct ReceivedShape {
+src-tauri/src/history.rs:85:impl ReceivedShape {
+src-tauri/src/history.rs:127:    /// Receive only, set at open so a crash still leaves a reclaimable pointer.
+src-tauri/src/history.rs:236:        let shape = ReceivedShape::from_file_names(&file_names);
+src-tauri/src/history.rs:237:        let is_receive = self.direction == TransferDirection::Receive;
+src-tauri/src/history.rs:255:            // A send knows its own shape up front; a receive only learns it
+src-tauri/src/history.rs:257:            if is_receive && shape.item_count > 0 {
+src-tauri/src/history.rs:281:            "transfer-started" | "receive-started" => self.open_row(),
+src-tauri/src/history.rs:282:            "transfer-completed" | "receive-completed" => {
+src-tauri/src/history.rs:289:            "transfer-progress" | "receive-progress" => {
+src-tauri/src/history.rs:294:            "receive-file-names" => {
+src-tauri/src/history.rs:329:/// Where a partial receive for `hash` would live.
+src-tauri/src/history.rs:331:    std::env::temp_dir().join(format!(".sendme-recv-{hash}"))
+src-tauri/src/history.rs:363:    fn send_context() -> TransferContext {
+src-tauri/src/history.rs:377:        let (store, emitter) = recorder(&dir, TransferDirection::Send, send_context());
+src-tauri/src/history.rs:386:    fn a_completed_send_records_duration_speed_and_peer() {
+src-tauri/src/history.rs:388:        let mut context = send_context();
+src-tauri/src/history.rs:394:        let (store, emitter) = recorder(&dir, TransferDirection::Send, context);
+src-tauri/src/history.rs:421:    fn a_failed_send_records_the_failure_not_a_success() {
+src-tauri/src/history.rs:423:        let (store, emitter) = recorder(&dir, TransferDirection::Send, send_context());
+src-tauri/src/history.rs:435:        let (store, emitter) = recorder(&dir, TransferDirection::Send, send_context());
+src-tauri/src/history.rs:453:        let mut context = send_context();
+src-tauri/src/history.rs:459:        let (store, emitter) = recorder(&dir, TransferDirection::Send, context);
+src-tauri/src/history.rs:477:    fn receive_context(partial: &str) -> TransferContext {
+src-tauri/src/history.rs:487:    fn a_completed_receive_learns_its_shape_and_drops_the_partial_pointer() {
+src-tauri/src/history.rs:491:            TransferDirection::Receive,
+src-tauri/src/history.rs:492:            receive_context("/tmp/.sendme-recv-hash"),
+src-tauri/src/history.rs:495:        emitter.emit_event("receive-started").expect("emit");
+src-tauri/src/history.rs:497:            .emit_event_with_payload("receive-file-names", r#"["Photos/a.jpg","Photos/b.jpg"]"#)
+src-tauri/src/history.rs:501:                "receive-completed",
+src-tauri/src/history.rs:521:    fn a_receive_killed_mid_transfer_stays_reclaimable() {
+src-tauri/src/history.rs:525:            TransferDirection::Receive,
+src-tauri/src/history.rs:526:            receive_context("/tmp/.sendme-recv-hash"),
+src-tauri/src/history.rs:529:        emitter.emit_event("receive-started").expect("emit");
+src-tauri/src/history.rs:531:            .emit_event_with_payload("receive-progress", "4096:8192:500000")
+src-tauri/src/history.rs:540:            Some("/tmp/.sendme-recv-hash"),
+src-tauri/src/history.rs:552:    fn a_cancelled_receive_reports_how_far_it_got() {
+src-tauri/src/history.rs:556:            TransferDirection::Receive,
+src-tauri/src/history.rs:557:            receive_context("/tmp/.sendme-recv-hash"),
+src-tauri/src/history.rs:560:        emitter.emit_event("receive-started").expect("emit");
+src-tauri/src/history.rs:562:            .emit_event_with_payload("receive-progress", "4096:8192:500000")
+src-tauri/src/history.rs:575:        let (_store, emitter) = recorder(&dir, TransferDirection::Send, send_context());
+src-tauri/src/history.rs:653:        let shape = ReceivedShape::from_file_names(&["report.pdf".to_string()]);
+src-tauri/src/history.rs:661:        let shape = ReceivedShape::from_file_names(&[
+src-tauri/src/history.rs:673:        let shape = ReceivedShape::from_file_names(&[
+src-tauri/src/history.rs:684:        let shape = ReceivedShape::from_file_names(&[]);
+src-tauri/src/commands.rs:12:    FilePreviewItem, NearbyDevice, NodeService, PairedDevice, PairedDeviceInfo, ReceiveOptions,
+src-tauri/src/commands.rs:13:    SendOptions, TransferDirection, TransferHistoryStore, TransferPathType, TransferPeer,
+src-tauri/src/commands.rs:117:/// The sender behind a ticket. Every ticket carries its origin endpoint id, so
+src-tauri/src/commands.rs:118:/// this works for a pasted ticket as well as a paired invite.
+src-tauri/src/commands.rs:119:fn sender_peer_from_ticket(ticket: &str, node: &Option<Arc<NodeService>>) -> Option<TransferPeer> {
+src-tauri/src/commands.rs:120:    use iroh_blobs::ticket::BlobTicket;
+src-tauri/src/commands.rs:123:    let ticket = BlobTicket::from_str(ticket).ok()?;
+src-tauri/src/commands.rs:124:    let endpoint_id = ticket.addr().id.to_string();
+src-tauri/src/commands.rs:208:    send_items(vec![path], relay, discovery, state, history, app_handle).await
+src-tauri/src/commands.rs:213:pub async fn send_items(
+src-tauri/src/commands.rs:239:        let metadata = build_send_metadata(&path_bufs).await?;
+src-tauri/src/commands.rs:247:        // Create send options from relay settings.
+src-tauri/src/commands.rs:250:        let options = SendOptions {
+src-tauri/src/commands.rs:253:            ticket_type: AddrInfoOptions::RelayAndAddresses,
+src-tauri/src/commands.rs:262:            TransferDirection::Send,
+src-tauri/src/commands.rs:276:                // Without this, sender-side bug reports end at connection setup.
+src-tauri/src/commands.rs:278:                    target: "dashbeam::_events::transfer::send_failed",
+src-tauri/src/commands.rs:284:        if let Some(payload) = relay_fallback_event_payload("send", fell_back_to_public) {
+src-tauri/src/commands.rs:293:        Ok((result.ticket.clone(), path_bufs, result, recorder))
+src-tauri/src/commands.rs:298:        Ok((ticket, paths, result, recorder)) => {
+src-tauri/src/commands.rs:306:            // Keep full send result alive to preserve router/temp_tag lifecycle.
+src-tauri/src/commands.rs:309:                Some(ShareHandle::new(ticket.clone(), primary, result, recorder));
+src-tauri/src/commands.rs:310:            Ok(ticket)
+src-tauri/src/commands.rs:320:async fn build_send_metadata(paths: &[PathBuf]) -> Result<FileMetadata, String> {
+src-tauri/src/commands.rs:387:/// Fetch metadata from sender by ticket, without starting file download.
+src-tauri/src/commands.rs:389:pub async fn fetch_ticket_metadata(
+src-tauri/src/commands.rs:390:    ticket: String,
+src-tauri/src/commands.rs:394:    let ticket_len = ticket.len();
+src-tauri/src/commands.rs:395:    tracing::info!(ticket_len, "fetch_ticket_metadata called");
+src-tauri/src/commands.rs:399:    let options = ReceiveOptions {
+src-tauri/src/commands.rs:407:    match fetch_metadata(ticket, options).await {
+src-tauri/src/commands.rs:413:                "fetch_ticket_metadata succeeded"

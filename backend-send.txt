@@ -1,0 +1,101 @@
+            window.unminimize().map_err(|e| e.to_string())?;
+        }
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    Err("No window available to focus".to_string())
+}
+
+#[tauri::command]
+pub async fn start_sharing(
+    path: String,
+    relay: Option<RelayConfigArg>,
+    discovery: Option<DiscoveryConfigArg>,
+    state: State<'_, AppStateMutex>,
+    history: State<'_, Arc<TransferHistoryStore>>,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    send_items(vec![path], relay, discovery, state, history, app_handle).await
+}
+
+/// New interface to start_sharing multiple items at once
+#[tauri::command]
+pub async fn send_items(
+    paths: Vec<String>,
+    relay: Option<RelayConfigArg>,
+    discovery: Option<DiscoveryConfigArg>,
+    state: State<'_, AppStateMutex>,
+    history: State<'_, Arc<TransferHistoryStore>>,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    // Validate input before doing any work.
+    if paths.is_empty() {
+        return Err("No paths provided".to_string());
+    }
+
+    let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+
+    // Reserve slot before expensive setup to avoid concurrent start_sharing races.
+    {
+        let mut app_state = state.lock().await;
+        if app_state.current_share.is_some() || app_state.is_share_starting {
+            return Err("Already sharing a file. Please stop current share first.".to_string());
+        }
+        app_state.is_share_starting = true;
+    }
+
+    let start_result = async {
+        // Prepare metadata outside the state mutex.
+        let metadata = build_send_metadata(&path_bufs).await?;
+        tracing::info!(
+            first_path_stem = ?path_bufs[0].file_stem(),
+            total_size = metadata.size,
+            has_thumbnail = metadata.thumbnail.is_some(),
+            "share metadata prepared for multiple items"
+        );
+
+        // Create send options from relay settings.
+        let (relay_mode, fell_back_to_public) = resolve_relay_mode_with_fallback(relay).await?;
+        let discovery_mode = build_discovery_mode(discovery)?;
+        let options = SendOptions {
+            relay_mode,
+            discovery_mode,
+            ticket_type: AddrInfoOptions::RelayAndAddresses,
+            magic_ipv4_addr: None,
+            magic_ipv6_addr: None,
+        };
+
+        // Known before the first byte moves; the row opens on first pull.
+        let (boxed_handle, recorder) = build_emitter(
+            &app_handle,
+            &history,
+            TransferDirection::Send,
+            TransferContext {
+                root_name: metadata.file_name.clone(),
+                payload_bytes: metadata.size,
+                item_count: metadata.item_count,
+                path_type: path_type_from_mime(metadata.mime_type.as_deref()),
+                ..Default::default()
+            },
+        );
+
+        // Ephemeral share — relay settings apply per session (all platforms including Android).
+        let result = start_share_items(path_bufs.clone(), options, &boxed_handle, Some(metadata))
+            .await
+            .map_err(|error| {
+                // Without this, sender-side bug reports end at connection setup.
+                tracing::error!(
+                    target: "dashbeam::_events::transfer::send_failed",
+                    item_count = path_bufs.len(),
+                    %error,
+                );
+                format!("Failed to start sharing: {}", error)
+            })?;
+        if let Some(payload) = relay_fallback_event_payload("send", fell_back_to_public) {
+            // Surface the selected custom->public fallback once the share has
+            // actually started with the resolved relay mode.
+            let _ = app_handle.emit("relay-fell-back", payload);
+        }
+        if let Some(recorder) = recorder.as_ref() {
+            let hash = result.hash.clone();
