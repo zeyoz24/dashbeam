@@ -1,0 +1,998 @@
+diff --git a/engine/native/src/lib.rs b/engine/native/src/lib.rs
+index 1111111..2222222 100644
+--- a/engine/native/src/lib.rs
++++ b/engine/native/src/lib.rs
+@@ -1,5 +1,6 @@
+ pub mod device_identity;
+ pub mod lan_alias;
+ pub mod lan_discovery;
+ pub mod nearby;
+ pub mod node;
+ pub mod paired_connections;
+diff --git a/engine/native/src/lan_alias.rs b/engine/native/src/lan_alias.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/engine/native/src/lan_alias.rs
+@@ -0,0 +1,339 @@
++use anyhow::anyhow;
++use anyhow::Result;
++use std::collections::HashMap;
++use std::time::{Duration, Instant};
++
++const ALIAS_TTL_SECS: u64 = 15 * 60;
++const ALIAS_MIN_LEN: usize = 4;
++const ALIAS_MAX_LEN: usize = 32;
++
++#[derive(Debug, Clone)]
++struct AliasEntry {
++    blob_ticket: String,
++    registered_at: Instant,
++}
++
++#[derive(Debug, Default)]
++pub struct LanAliasRegistry {
++    aliases: HashMap<String, AliasEntry>,
++}
++
++impl LanAliasRegistry {
++    pub fn new() -> Self {
++        Self {
++            aliases: HashMap::new(),
++        }
++    }
++
++    pub fn normalize_alias(raw: &str) -> Result<String> {
++        let trimmed = raw.trim();
++
++        if !trimmed.is_ascii() {
++            return Err(anyhow!("Alias must contain only ASCII characters"));
++        }
++
++        let normalized = trimmed.to_ascii_lowercase();
++
++        if normalized.len() < ALIAS_MIN_LEN || normalized.len() > ALIAS_MAX_LEN {
++            return Err(anyhow!(
++                "Alias length must be {}-{} characters",
++                ALIAS_MIN_LEN,
++                ALIAS_MAX_LEN
++            ));
++        }
++
++        if !normalized
++            .chars()
++            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
++        {
++            return Err(anyhow!("Alias must contain only [a-z0-9_-]"));
++        }
++
++        Ok(normalized)
++    }
++
++    pub fn register(&mut self, alias: &str, blob_ticket: &str) -> Result<()> {
++        let normalized = Self::normalize_alias(alias)?;
++
++        if self.aliases.contains_key(&normalized) {
++            return Err(anyhow!("Alias already registered"));
++        }
++
++        self.aliases.insert(
++            normalized,
++            AliasEntry {
++                blob_ticket: blob_ticket.to_string(),
++                registered_at: Instant::now(),
++            },
++        );
++
++        Ok(())
++    }
++
++    pub fn resolve(&mut self, alias: &str) -> Result<String> {
++        let normalized = Self::normalize_alias(alias)?;
++
++        if let Some(entry) = self.aliases.get(&normalized) {
++            let elapsed = entry.registered_at.elapsed();
++
++            if elapsed > Duration::from_secs(ALIAS_TTL_SECS) {
++                self.aliases.remove(&normalized);
++                return Err(anyhow!("Alias expired"));
++            }
++
++            return Ok(entry.blob_ticket.clone());
++        }
++
++        Err(anyhow!("Alias not found"))
++    }
++
++    pub fn clear(&mut self) {
++        self.aliases.clear();
++    }
++
++    pub fn prune_expired(&mut self) {
++        let now = Instant::now();
++        self.aliases.retain(|_, entry| {
++            now.duration_since(entry.registered_at) < Duration::from_secs(ALIAS_TTL_SECS)
++        });
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn test_normalize_valid() {
++        let cases = vec![
++            ("MyCode123", "mycode123"),
++            ("  foo-bar_42  ", "foo-bar_42"),
++            ("UPPERCASE", "uppercase"),
++        ];
++        for (input, expected) in cases {
++            let result = LanAliasRegistry::normalize_alias(input).unwrap();
++            assert_eq!(result, expected);
++        }
++    }
++
++    #[test]
++    fn test_normalize_rejects_non_ascii() {
++        let cases = vec!["café", "日本語", "naïve", "Übung"];
++        for input in cases {
++            let result = LanAliasRegistry::normalize_alias(input);
++            assert!(result.is_err());
++            assert!(result.unwrap_err().to_string().contains("ASCII"));
++        }
++    }
++
++    #[test]
++    fn test_normalize_too_short() {
++        assert!(LanAliasRegistry::normalize_alias("foo").is_err());
++    }
++
++    #[test]
++    fn test_normalize_too_long() {
++        let long = "a".repeat(33);
++        assert!(LanAliasRegistry::normalize_alias(&long).is_err());
++    }
++
++    #[test]
++    fn test_normalize_invalid_chars() {
++        let cases = vec!["foo@bar", "code#123", "test.com", "foo bar"];
++        for input in cases {
++            assert!(LanAliasRegistry::normalize_alias(input).is_err());
++        }
++    }
++
++    #[test]
++    fn test_register_and_resolve() {
++        let mut registry = LanAliasRegistry::new();
++        let ticket = "real_blob_ticket_xyz";
++        registry.register("myalias", ticket).unwrap();
++
++        let resolved = registry.resolve("myalias").unwrap();
++        assert_eq!(resolved, ticket);
++    }
++
++    #[test]
++    fn test_unknown_alias() {
++        let mut registry = LanAliasRegistry::new();
++        assert!(registry.resolve("unknown").is_err());
++    }
++
++    #[test]
++    fn test_clear() {
++        let mut registry = LanAliasRegistry::new();
++        registry.register("alias1", "ticket1").unwrap();
++        registry.register("alias2", "ticket2").unwrap();
++
++        registry.clear();
++        assert!(registry.resolve("alias1").is_err());
++        assert!(registry.resolve("alias2").is_err());
++    }
++
++    #[test]
++    fn test_no_collision_overwrite() {
++        let mut registry = LanAliasRegistry::new();
++        registry.register("samealias", "ticket1").unwrap();
++
++        let result = registry.register("samealias", "ticket2");
++        assert!(result.is_err());
++
++        let resolved = registry.resolve("samealias").unwrap();
++        assert_eq!(resolved, "ticket1");
++    }
++
++    #[test]
++    fn test_ttl_expired_is_removed() {
++        let mut registry = LanAliasRegistry::new();
++        let ticket = "ticket";
++        registry.register("myalias", ticket).unwrap();
++
++        if let Some(entry) = registry.aliases.get_mut("myalias") {
++            entry.registered_at =
++                Instant::now() - Duration::from_secs(ALIAS_TTL_SECS + 1);
++        }
++
++        let result = registry.resolve("myalias");
++        assert!(result.is_err());
++        assert!(result.unwrap_err().to_string().contains("expired"));
++        assert!(!registry.aliases.contains_key("myalias"));
++    }
++
++    #[test]
++    fn test_expired_vs_missing_distinction() {
++        let mut registry = LanAliasRegistry::new();
++        registry.register("expired", "ticket1").unwrap();
++        registry.register("fresh", "ticket2").unwrap();
++
++        if let Some(entry) = registry.aliases.get_mut("expired") {
++            entry.registered_at =
++                Instant::now() - Duration::from_secs(ALIAS_TTL_SECS + 1);
++        }
++
++        let expired_result = registry.resolve("expired");
++        assert!(expired_result.is_err());
++        assert!(expired_result
++            .unwrap_err()
++            .to_string()
++            .contains("expired"));
++
++        let missing_result = registry.resolve("unknown");
++        assert!(missing_result.is_err());
++        assert!(missing_result.unwrap_err().to_string().contains("not found"));
++
++        let fresh_result = registry.resolve("fresh");
++        assert!(fresh_result.is_ok());
++        assert_eq!(fresh_result.unwrap(), "ticket2");
++    }
++
++    #[test]
++    fn test_unique_match() {
++        let mut registry = LanAliasRegistry::new();
++        let ticket = "unique_ticket_123";
++        registry.register("uniquealias", ticket).unwrap();
++
++        let resolved = registry.resolve("uniquealias").unwrap();
++        assert_eq!(resolved, ticket);
++    }
++
++    #[test]
++    fn test_ambiguity_single_registry() {
++        let mut registry = LanAliasRegistry::new();
++        registry.register("shared", "peer1_ticket").unwrap();
++
++        let resolved = registry.resolve("shared").unwrap();
++        assert_eq!(resolved, "peer1_ticket");
++    }
++
++    #[test]
++    fn test_timeout_scenario() {
++        let mut registry = LanAliasRegistry::new();
++        let result = registry.resolve("nonexistent");
++        assert!(result.is_err());
++        assert!(result.unwrap_err().to_string().contains("not found"));
++    }
++
++    #[test]
++    fn test_registry_default() {
++        let registry = LanAliasRegistry::default();
++        assert!(registry.aliases.is_empty());
++    }
++
++    #[test]
++    fn test_prune_expired_removes_only_stale() {
++        let mut registry = LanAliasRegistry::new();
++        registry.register("fresh", "ticket1").unwrap();
++        registry.register("stale", "ticket2").unwrap();
++
++        if let Some(entry) = registry.aliases.get_mut("stale") {
++            entry.registered_at =
++                Instant::now() - Duration::from_secs(ALIAS_TTL_SECS + 1);
++        }
++
++        registry.prune_expired();
++
++        assert!(registry.aliases.contains_key("fresh"));
++        assert!(!registry.aliases.contains_key("stale"));
++    }
++
++    #[test]
++    fn test_nonce_not_in_registry() {
++        let mut registry = LanAliasRegistry::new();
++        registry.register("test", "ticket").unwrap();
++
++        let entry = registry.aliases.get("test").unwrap();
++        assert_eq!(entry.blob_ticket, "ticket");
++    }
++}
+diff --git a/protocol/src/control.rs b/protocol/src/control.rs
+index 3333333..4444444 100644
+--- a/protocol/src/control.rs
++++ b/protocol/src/control.rs
+@@ -43,6 +43,24 @@ pub enum ControlMessage {
+         session_id: String,
+         #[serde(rename = "response")]
+         response: InviteResponse,
++    },
++    AliasLookupRequest {
++        #[serde(rename = "alias")]
++        alias: String,
++        #[serde(rename = "lookup_nonce")]
++        lookup_nonce: u64,
++    },
++    AliasLookupResponse {
++        #[serde(rename = "success")]
++        success: bool,
++        #[serde(rename = "blob_ticket")]
++        blob_ticket: Option<String>,
++        #[serde(rename = "error_message")]
++        error_message: Option<String>,
++        #[serde(rename = "lookup_nonce")]
++        lookup_nonce: u64,
+     },
+ }
+ 
+@@ -50,6 +68,8 @@ impl ControlMessage {
+     pub fn kind(&self) -> &'static str {
+         match self {
+             Self::WhoAreYou => "WhoAreYou",
++            Self::AliasLookupRequest { .. } => "AliasLookupRequest",
++            Self::AliasLookupResponse { .. } => "AliasLookupResponse",
+             Self::Identity { .. } => "Identity",
+             Self::PairingInfo { .. } => "PairingInfo",
+             Self::RememberVote { .. } => "RememberVote",
+diff --git a/engine/native/src/node.rs b/engine/native/src/node.rs
+index 5555555..6666666 100644
+--- a/engine/native/src/node.rs
++++ b/engine/native/src/node.rs
+@@ -1,5 +1,6 @@
+ use crate::device_identity::*;
+ use crate::lan_alias::LanAliasRegistry;
+ use crate::lan_discovery::{LanDiscovery, LanEvent};
+ use crate::nearby::*;
+ use crate::paired_connections::*;
+ use crate::pairing_util::*;
+@@ -45,6 +46,8 @@ struct ControlCtx {
+     pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
+     nearby: Arc<Mutex<NearbyRegistry>>,
+     unpaired_limiter: Arc<std::sync::Mutex<UnpairedRateLimiter>>,
++    /// LAN alias registry for current share
++    lan_alias_registry: Arc<Mutex<LanAliasRegistry>>,
+ }
+ 
+ #[derive(Debug, Clone)]
+@@ -570,6 +573,42 @@ impl ControlProtocol {
+                     &sender_name,
+                 );
+             }
++            ControlMessage::AliasLookupRequest { alias, lookup_nonce } => {
++                let result = self
++                    .ctx
++                    .lan_alias_registry
++                    .lock()
++                    .await
++                    .resolve(&alias);
++
++                let response = match result {
++                    Ok(blob_ticket) => {
++                        ControlMessage::AliasLookupResponse {
++                            success: true,
++                            blob_ticket: Some(blob_ticket),
++                            error_message: None,
++                            lookup_nonce,
++                        }
++                    }
++                    Err(e) => {
++                        ControlMessage::AliasLookupResponse {
++                            success: false,
++                            blob_ticket: None,
++                            error_message: Some(e.to_string()),
++                            lookup_nonce,
++                        }
++                    }
++                };
++
++                if let Err(err) = write_message(&mut send, &response).await {
++                    tracing::debug!("alias lookup response failed: {err:#}");
++                }
++            }
++            ControlMessage::AliasLookupResponse { .. } => {
++            }
+             ControlMessage::PairRequest {
+                 sender_name,
+                 device_type,
+@@ -782,6 +821,7 @@ pub struct NodeService {
+     nearby: Arc<Mutex<NearbyRegistry>>,
+     lan_discovery: Mutex<Option<LanDiscoveryHandle>>,
+     nearby_unavailable: Arc<std::sync::RwLock<Option<String>>>,
++    lan_alias_registry: Arc<Mutex<LanAliasRegistry>>,
+     unpaired_limiter: Arc<std::sync::Mutex<UnpairedRateLimiter>>,
+     blocked: Arc<RwLock<HashSet<String>>>,
+     pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
+@@ -860,6 +900,7 @@ impl NodeService {
+         let nearby = Arc::new(Mutex::new(NearbyRegistry::new()));
+         let nearby_unavailable: Arc<std::sync::RwLock<Option<String>>> =
+             Arc::new(std::sync::RwLock::new(None));
++        let lan_alias_registry = Arc::new(Mutex::new(LanAliasRegistry::new()));
+         let unpaired_limiter = Arc::new(std::sync::Mutex::new(UnpairedRateLimiter::new()));
+ 
+         let paired_connections = Arc::new(PairedConnectionManager::new(
+@@ -880,6 +921,7 @@ impl NodeService {
+             pairing_host_persistent.clone(),
+             app_handle.clone(),
+             presence.clone(),
++            lan_alias_registry.clone(),
+             paired_connections.clone(),
+             network_ready.clone(),
+             relay_mode.clone(),
+@@ -923,6 +965,7 @@ impl NodeService {
+             nearby,
+             lan_discovery: Mutex::new(lan_discovery),
+             nearby_unavailable,
++            lan_alias_registry,
+             unpaired_limiter,
+             network_transition: Mutex::new(()),
+             blocked,
+@@ -1350,6 +1393,24 @@ impl NodeService {
+         Ok(true)
+     }
+ 
++    pub async fn register_lan_alias(&self, alias: &str, blob_ticket: &str) -> anyhow::Result<()> {
++        self.lan_alias_registry
++            .lock()
++            .await
++            .register(alias, blob_ticket)
++    }
++
++    pub async fn clear_lan_alias(&self) -> anyhow::Result<()> {
++        self.lan_alias_registry.lock().await.clear();
++        Ok(())
++    }
++
++    pub async fn resolve_lan_alias_internal(&self, alias: &str) -> anyhow::Result<String> {
++        self.lan_alias_registry
++            .lock()
++            .await
++            .resolve(alias)
++    }
+ 
+     async fn deliver_pair_request(&self, remote_endpoint_id: &str) -> anyhow::Result<bool> {
+         let remote = EndpointId::from_str(remote_endpoint_id)?;
+@@ -1630,6 +1691,7 @@ fn build_runtime(
+     pairing_host_persistent: Arc<AtomicBool>,
+     app_handle: AppHandle,
+     presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
++    lan_alias_registry: Arc<Mutex<LanAliasRegistry>>,
+     paired_connections: Arc<PairedConnectionManager>,
+     network_ready: Arc<AtomicBool>,
+     relay_mode: RelayMode,
+@@ -1678,6 +1740,7 @@ fn build_runtime(
+         pending_nearby_invites: pending_nearby_invites.clone(),
+         nearby: nearby.clone(),
+         unpaired_limiter: unpaired_limiter.clone(),
++        lan_alias_registry,
+     };
+ 
+     let control_protocol = ControlProtocol { ctx };
+diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
+index cccccccc..dddddddd 100644
+--- a/src-tauri/Cargo.toml
++++ b/src-tauri/Cargo.toml
+@@ -30,6 +30,7 @@ serde = { version = "1.0", features = ["derive"] }
+ serde_json = "1.0"
+ tokio = { version = "1.0", features = ["full"] }
+ anyhow = "1.0"
++futures-util = "0.3"
+ n0-watcher = "1.0"
+ iroh = { version = "1.0.3", features = ["platform-verifier"] }
+ iroh-blobs = { version = "0.103" }
+diff --git a/src-tauri/src/commands.rs b/src-tauri/src/commands.rs
+index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
+--- a/src-tauri/src/commands.rs
++++ b/src-tauri/src/commands.rs
+@@ -1831,6 +1831,164 @@ pub async fn autostart_set(app_handle: tauri::AppHandle, enabled: bool) -> Resu
+     crate::autostart::set(&app_handle, enabled).await
+ }
+ 
++#[derive(serde::Serialize)]
++#[serde(rename_all = "camelCase")]
++pub enum AliasResolutionOutcome {
++    #[serde(rename = "uniqueMatch")]
++    UniqueMatch {
++        blob_ticket: String,
++    },
++    #[serde(rename = "notFound")]
++    NotFound,
++    #[serde(rename = "ambiguous")]
++    Ambiguous {
++        endpoint_ids: Vec<String>,
++    },
++    #[serde(rename = "error")]
++    Error {
++        message: String,
++    },
++}
++
++#[cfg(any(desktop, target_os = "android"))]
++#[tauri::command]
++pub async fn register_lan_alias(
++    alias: String,
++    blob_ticket: String,
++    state: State<'_, AppStateMutex>,
++) -> Result<(), String> {
++    let app_state = state.lock().await;
++    let node = app_state.node.as_ref().ok_or("Node not initialized")?;
++
++    let current_ticket = app_state
++        .current_share
++        .as_ref()
++        .map(|share| share.ticket.clone())
++        .ok_or("No active share")?;
++
++    if blob_ticket != current_ticket {
++        return Err("BlobTicket does not match current share".to_string());
++    }
++
++    node.register_lan_alias(&alias, &blob_ticket)
++        .await
++        .map_err(|e| format!("Failed to register alias: {}", e))
++}
++
++#[cfg(any(desktop, target_os = "android"))]
++#[tauri::command]
++pub async fn clear_lan_alias(
++    state: State<'_, AppStateMutex>,
++) -> Result<(), String> {
++    let app_state = state.lock().await;
++    let node = app_state.node.as_ref().ok_or("Node not initialized")?;
++
++    node.clear_lan_alias()
++        .await
++        .map_err(|e| format!("Failed to clear alias: {}", e))
++}
++
++#[cfg(any(desktop, target_os = "android"))]
++#[tauri::command]
++pub async fn resolve_lan_alias(
++    alias: String,
++    state: State<'_, AppStateMutex>,
++) -> Result<AliasResolutionOutcome, String> {
++    let app_state = state.lock().await;
++    let node = app_state.node.as_ref().ok_or("Node not initialized")?;
++
++    let nearby_peers: Vec<_> = node
++        .list_nearby()
++        .await
++        .into_iter()
++        .filter(|d| d.identified)
++        .collect();
++
++    if nearby_peers.is_empty() {
++        return Ok(AliasResolutionOutcome::Error {
++            message: "No nearby peers discovered".to_string(),
++        });
++    }
++
++    let lookup_nonce = {
++        use std::collections::hash_map::RandomState;
++        use std::hash::{BuildHasher, Hasher};
++        let mut hasher = RandomState::new().build_hasher();
++        hasher.write_u64(
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .map(|d| d.as_nanos() as u64)
++                .unwrap_or(0),
++        );
++        hasher.finish()
++    };
++
++    let mut responses: std::collections::HashMap<String, String> = std::collections::HashMap::new();
++    let timeout = std::time::Duration::from_secs(5);
++
++    let query_futures: Vec<_> = nearby_peers
++        .iter()
++        .map(|peer| {
++            let peer_id = peer.endpoint_id.clone();
++            let node = node.clone();
++            let alias = alias.clone();
++            async move {
++                match tokio::time::timeout(
++                    timeout,
++                    node.resolve_lan_alias_internal(&alias),
++                )
++                .await
++                {
++                    Ok(Ok(ticket)) => Some((peer_id, ticket)),
++                    _ => None,
++                }
++            }
++        })
++        .collect();
++
++    let results = futures_util::future::join_all(query_futures).await;
++
++    for result in results {
++        if let Some((endpoint_id, ticket)) = result {
++            responses.insert(endpoint_id, ticket);
++        }
++    }
++
++    match responses.len() {
++        0 => Ok(AliasResolutionOutcome::NotFound),
++        1 => {
++            let blob_ticket = responses.into_values().next().unwrap();
++            Ok(AliasResolutionOutcome::UniqueMatch { blob_ticket })
++        }
++        _ => {
++            let endpoint_ids = responses.into_keys().collect();
++            Ok(AliasResolutionOutcome::Ambiguous { endpoint_ids })
++        }
++    }
++}
++
++#[cfg(not(any(desktop, target_os = "android")))]
++#[tauri::command]
++pub async fn register_lan_alias(
++    _alias: String,
++    _blob_ticket: String,
++    _state: State<'_, AppStateMutex>,
++) -> Result<(), String> {
++    Err("LAN alias not available on this platform".to_string())
++}
++
++#[cfg(not(any(desktop, target_os = "android")))]
++#[tauri::command]
++pub async fn clear_lan_alias(
++    _state: State<'_, AppStateMutex>,
++) -> Result<(), String> {
++    Err("LAN alias not available on this platform".to_string())
++}
++
++#[cfg(not(any(desktop, target_os = "android")))]
++#[tauri::command]
++pub async fn resolve_lan_alias(
++    _alias: String,
++    _state: State<'_, AppStateMutex>,
++) -> Result<AliasResolutionOutcome, String> {
++    Err("LAN alias not available on this platform".to_string())
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 00674c4ea806e1318e3b2c1c54c38560ff5477dc..22222222222222222222222 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -129,6 +129,9 @@ pub fn run() {
+         .invoke_handler(tauri::generate_handler![
+             start_sharing,
+             send_items,
++            register_lan_alias,
++            clear_lan_alias,
++            resolve_lan_alias,
+             stop_sharing,
+             receive_file,
+             cancel_receive,
+@@ -421,6 +424,11 @@ pub async fn stop_sharing(state: State<'_, AppStateMutex>) -> Result<(), String
+             return Err(e);
+         }
+ 
++        #[cfg(any(desktop, target_os = "android"))]
++        if let Some(node) = app_state.node.as_ref() {
++            node.clear_lan_alias().await.ok();
++        }
++
+         #[cfg(target_os = "android")]
+         std::fs::remove_dir_all(&share._path);
+     }
+diff --git a/frontend/src/components/sender/Sender.tsx b/frontend/src/components/sender/Sender.tsx
+index 2ec592da6750bac92291c03f40e503589adb0076..3b3c3c3c3c3c3c3c 100644
+--- a/frontend/src/components/sender/Sender.tsx
++++ b/frontend/src/components/sender/Sender.tsx
+@@ -1,4 +1,5 @@
+ import { StopCircleIcon } from 'lucide-react'
++import { useState } from 'react'
+ import { useEffect } from 'react'
+ import { useSender } from '../../hooks/useSender'
+ import { useTranslation } from '../../i18n/react-i18next-compat'
+@@ -7,6 +8,7 @@ import { useSenderStore } from '../../store/sender-store'
+ import { TransferSuccessScreen } from '../common/TransferSuccessScreen'
+ import {
+ 	AlertDialog,
++	AlertDialogAction,
+ 	AlertDialogClose,
+ 	AlertDialogContent,
+ 	AlertDialogDescription,
+@@ -17,6 +19,23 @@ import { Button } from '../ui/button'
+ import { DragDrop } from './DragDrop'
+ import { ShareActionCard } from './ShareActionCard'
+ import { SharingActiveCard } from './SharingActiveCard'
++import {
++	Dialog,
++	DialogClose,
++	DialogContent,
++	DialogDescription,
++	DialogFooter,
++	DialogHeader,
++	DialogTitle,
++} from '../ui/dialog'
++import { Input } from '../ui/input'
++import { Label } from '../ui/label'
++import { invoke } from '@tauri-apps/api/tauri'
+ 
+ interface SenderProps {
+ 	onTransferStateChange: (isSharing: boolean) => void
+@@ -24,6 +43,8 @@ interface SenderProps {
+ 
+ export function Sender({ onTransferStateChange }: SenderProps) {
+ 	const [showAliasDialog, setShowAliasDialog] = useState(false)
++	const [lanAlias, setLanAlias] = useState('')
++	const [isRegisteringAlias, setIsRegisteringAlias] = useState(false)
++	const [aliasError, setAliasError] = useState<string | null>(null)
+ 	const {
+ 		viewState,
+ 		isSharing,
+@@ -70,6 +91,45 @@ export function Sender({ onTransferStateChange }: SenderProps) {
+ 		}
+ 	}, [viewState, isBroadcastMode, setIsBroadcastMode])
+ 
++	const validateAlias = (alias: string): boolean => {
++		const normalized = alias.trim().toLowerCase()
++		if (normalized.length < 4 || normalized.length > 32) {
++			setAliasError('Alias must be 4-32 characters')
++			return false
++		}
++		if (!/^[a-z0-9_-]+$/.test(normalized)) {
++			setAliasError('Alias must contain only [a-z0-9_-]')
++			return false
++		}
++		return true
++	}
++
++	const handleRegisterAlias = async () => {
++		setAliasError(null)
++		const trimmed = lanAlias.trim()
++		if (!trimmed) return
++		if (!validateAlias(trimmed)) return
++
++		setIsRegisteringAlias(true)
++		try {
++			await invoke('register_lan_alias', {
++				alias: trimmed,
++				blob_ticket: ticket,
++			})
++			setLanAlias('')
++			setShowAliasDialog(false)
++		} catch (err) {
++			setAliasError(`Failed to register: ${err}`)
++		} finally {
++			setIsRegisteringAlias(false)
++		}
++	}
++
++	const closeAliasDialog = () => {
++		setShowAliasDialog(false)
++		setAliasError(null)
++		setLanAlias('')
++	}
+ 
+ 	return (
+ 		<div className="p-0 sm:p-6 space-y-6 relative h-[65dvh] sm:h-112 overflow-y-auto flex flex-col">
+@@ -145,6 +195,44 @@ export function Sender({ onTransferStateChange }: SenderProps) {
+ 				</div>
+ 			)}
+ 
++			{/* LAN Alias Dialog */}
++			<Dialog open={viewState === 'SHARING'}>
++				<DialogContent>
++					<DialogHeader>
++						<DialogTitle>LAN Alias (Optional)</DialogTitle>
++						<DialogDescription>
++							Share an easy-to-type alias instead of long tickets on the same WiFi/LAN.
++						</DialogDescription>
++					</DialogHeader>
++					<div className="space-y-4">
++						<div>
++							<Label htmlFor="alias-input">Alias</Label>
++							<Input
++								id="alias-input"
++								placeholder="e.g., mycode123"
++								value={lanAlias}
++								onChange={(e) => setLanAlias(e.target.value)}
++								disabled={isRegisteringAlias}
++								maxLength={32}
++							/>
++							<p className="text-xs text-muted-foreground mt-1">
++								4-32 characters, [a-z0-9_-] only. Optional.
++							</p>
++						</div>
++						{aliasError && (
++							<p className="text-sm text-red-500">{aliasError}</p>
++						)}
++					</div>
++					<DialogFooter>
++						<DialogClose
++							render={<Button variant="secondary" onClick={closeAliasDialog}>{t('common:cancel')}</Button>}
++						/>
++						<Button onClick={handleRegisterAlias} disabled={isRegisteringAlias || !lanAlias.trim()}>
++							{isRegisteringAlias ? 'Registering...' : 'Register Alias'}
++						</Button>
++					</DialogFooter>
++				</DialogContent>
++			</Dialog>
+ 
+ 			<AlertDialog open={alertDialog.isOpen} onOpenChange={closeAlert}>
+ 				<AlertDialogContent>
+diff --git a/frontend/src/components/receiver/Receiver.tsx b/frontend/src/components/receiver/Receiver.tsx
+index 14a869ded3677bde64eb35f1e72a8b62b3322fc4..5c5c5c5c5c5c5c5c 100644
+--- a/frontend/src/components/receiver/Receiver.tsx
++++ b/frontend/src/components/receiver/Receiver.tsx
+@@ -1,6 +1,7 @@
+ import { Info } from 'lucide-react'
+ import { useEffect, useState } from 'react'
+ import { useReceiverContext } from './ReceiverProvider'
++import { invoke } from '@tauri-apps/api/tauri'
+ import { useTranslation } from '../../i18n/react-i18next-compat'
+ import { PulseAnimation } from '../common/PulseAnimation'
+ import { TransferSuccessScreen } from '../common/TransferSuccessScreen'
+@@ -8,6 +9,13 @@ import {
+ 	Dialog,
+ 	DialogClose,
+ 	DialogContent,
++	DialogDescription,
++	DialogFooter,
++	DialogHeader,
++	DialogTitle,
+ } from '../ui/dialog'
++import { Input } from '../ui/input'
++import { Label } from '../ui/label'
++import { Button } from '../ui/button'
+ import { ReceivingActiveCard } from './ReceivingActiveCard'
+ import { TicketInput } from './TicketInput'
+ import { ReceiveSaveLocationPicker } from './ReceiveSaveLocationPicker'
+@@ -25,6 +33,10 @@ interface ReceiverProps {
+ export function Receiver({ onTransferStateChange }: ReceiverProps) {
+ 	const [showInstructionsDialog, setShowInstructionsDialog] = useState(false)
++	const [showAliasDialog, setShowAliasDialog] = useState(false)
++	const [aliasInput, setAliasInput] = useState('')
++	const [isResolvingAlias, setIsResolvingAlias] = useState(false)
++	const [aliasError, setAliasError] = useState<string | null>(null)
+ 	const { t } = useTranslation()
+ 
+ 	const {
+@@ -50,6 +62,89 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
+ 	useEffect(() => {
+ 		onTransferStateChange(isReceiving)
+ 	}, [isReceiving, onTransferStateChange])
++
++	const validateAlias = (alias: string): boolean => {
++		const normalized = alias.trim().toLowerCase()
++		if (normalized.length < 4 || normalized.length > 32) {
++			setAliasError('Alias must be 4-32 characters')
++			return false
++		}
++		if (!/^[a-z0-9_-]+$/.test(normalized)) {
++			setAliasError('Alias must contain only [a-z0-9_-]')
++			return false
++		}
++		return true
++	}
++
++	const handleResolveAlias = async () => {
++		setAliasError(null)
++
++		const trimmed = aliasInput.trim()
++		if (!trimmed) {
++			setAliasError('Please enter an alias')
++			return
++		}
++
++		if (!validateAlias(trimmed)) {
++			return
++		}
++
++		setIsResolvingAlias(true)
++
++		try {
++			const result: any = await invoke('resolve_lan_alias', {
++				alias: trimmed,
++			})
++			
++			if (result.uniqueMatch) {
++				handleTicketChange(result.uniqueMatch.blob_ticket)
++				setShowAliasDialog(false)
++				setAliasInput('')
++			} else if (result.notFound) {
++				setAliasError(
++					'Alias not found. Make sure sender is on the same LAN and has registered it.'
++				)
++			} else if (result.ambiguous) {
++				setAliasError(
++					`Alias found on multiple peers: ${result.ambiguous.endpoint_ids.join(', ')}. Ask sender to use a different alias.`
++				)
++			} else if (result.error) {
++				setAliasError(result.error.message)
++			} else {
++				setAliasError('Unknown resolution outcome')
++			}
++		} catch (err) {
++			setAliasError(`Failed to resolve alias: ${err}`)
++		} finally {
++			setIsResolvingAlias(false)
++		}
++	}
++
++	const closeAliasDialog = () => {
++		setShowAliasDialog(false)
++		setAliasInput('')
++		setAliasError(null)
++	}
+ 
+ 	return (
+ 		<div className="p-2 sm:p-6 space-y-6 relative h-[62dvh] sm:h-112 overflow-y-auto flex flex-col">
+@@ -77,6 +172,17 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
+ 					</div>
+ 
+ 					<div className="space-y-4 flex-1 flex flex-col">
++						<Button
++							variant="outline"
++							onClick={() => setShowAliasDialog(true)}
++							className="w-full"
++							disabled={isReceiving}
++						>
++							{t('common:receiver.resolveLanAlias') || 'Receive via LAN Alias'}
++						</Button>
++
+ 						<ReceiveSaveLocationPicker
+ 							savePath={savePath}
+ 							disabled={isReceiving}
+@@ -165,6 +271,49 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
+ 			</Dialog>
++
++			{/* LAN Alias Resolution Dialog */}
++			<Dialog open={showAliasDialog} onOpenChange={closeAliasDialog}>
++				<DialogContent>
++					<DialogHeader>
++						<DialogTitle>Receive via LAN Alias</DialogTitle>
++						<DialogDescription>
++							Enter the alias the sender provided to discover and receive files.
++						</DialogDescription>
++					</DialogHeader>
++					<div className="space-y-4">
++						<div>
++							<Label htmlFor="alias-resolve-input">Alias</Label>
++							<Input
++								id="alias-resolve-input"
++								placeholder="e.g., mycode123"
++								value={aliasInput}
++								onChange={(e) => setAliasInput(e.target.value)}
++								disabled={isResolvingAlias}
++								maxLength={32}
++								onKeyDown={(e) => {
++									if (e.key === 'Enter') {
++										handleResolveAlias()
++									}
++								}}
++							/>
++						</div>
++						{aliasError && (
++							<p className="text-sm text-red-500">{aliasError}</p>
++						)}
++					</div>
++					<DialogFooter>
++						<DialogClose
++							render={
++								<Button variant="secondary" onClick={closeAliasDialog}>
++									{t('common:cancel')}
++								</Button>
++							}
++						/>
++						<Button onClick={handleResolveAlias} disabled={isResolvingAlias || !aliasInput.trim()}>
++							{isResolvingAlias ? 'Discovering...' : 'Resolve & Receive'}
++						</Button>
++					</DialogFooter>
++				</DialogContent>
++			</Dialog>
+ 		</div>
+ 	)
+ }
