@@ -9,6 +9,8 @@ index 1111111..2222222 100644
  pub mod nearby;
  pub mod node;
  pub mod paired_connections;
++pub use lan_alias::LanAliasRegistry;
+
 diff --git a/engine/native/src/lan_alias.rs b/engine/native/src/lan_alias.rs
 new file mode 100644
 index 0000000..1111111
@@ -304,42 +306,120 @@ index 0000000..1111111
 +        assert_eq!(entry.blob_ticket, "ticket");
 +    }
 +}
-diff --git a/protocol/src/control.rs b/protocol/src/control.rs
+
+diff --git a/engine/protocol/src/control.rs b/engine/protocol/src/control.rs
 index 3333333..4444444 100644
---- a/protocol/src/control.rs
-+++ b/protocol/src/control.rs
-@@ -43,6 +43,24 @@ pub enum ControlMessage {
+--- a/engine/protocol/src/control.rs
++++ b/engine/protocol/src/control.rs
+@@ -43,6 +43,22 @@ pub enum ControlMessage {
          session_id: String,
          #[serde(rename = "response")]
          response: InviteResponse,
-+    },
+     },
 +    AliasLookupRequest {
-+        #[serde(rename = "alias")]
 +        alias: String,
-+        #[serde(rename = "lookup_nonce")]
 +        lookup_nonce: u64,
 +    },
 +    AliasLookupResponse {
-+        #[serde(rename = "success")]
 +        success: bool,
-+        #[serde(rename = "blob_ticket")]
++        #[serde(default, skip_serializing_if = "Option::is_none")]
 +        blob_ticket: Option<String>,
-+        #[serde(rename = "error_message")]
++        #[serde(default, skip_serializing_if = "Option::is_none")]
 +        error_message: Option<String>,
-+        #[serde(rename = "lookup_nonce")]
 +        lookup_nonce: u64,
-     },
++    },
  }
  
-@@ -50,6 +68,8 @@ impl ControlMessage {
+ impl ControlMessage {
      pub fn kind(&self) -> &'static str {
          match self {
-             Self::WhoAreYou => "WhoAreYou",
-+            Self::AliasLookupRequest { .. } => "AliasLookupRequest",
-+            Self::AliasLookupResponse { .. } => "AliasLookupResponse",
-             Self::Identity { .. } => "Identity",
-             Self::PairingInfo { .. } => "PairingInfo",
-             Self::RememberVote { .. } => "RememberVote",
+-            Self::WhoAreYou => "WhoAreYou",
+-            Self::Identity { .. } => "Identity",
+-            Self::PairingInfo { .. } => "PairingInfo",
+-            Self::RememberVote { .. } => "RememberVote",
++            Self::PairingInfo { .. } => "pairing-info",
++            Self::RememberVote { .. } => "remember-vote",
++            Self::Invite { .. } => "invite",
++            Self::InviteResponse { .. } => "invite-response",
++            Self::AliasLookupRequest { .. } => "alias-lookup-request",
++            Self::AliasLookupResponse { .. } => "alias-lookup-response",
++            Self::Recognition { .. } => "recognition",
++            Self::Forget { .. } => "forget",
++            Self::WhoAreYou => "who-are-you",
++            Self::Identity { .. } => "identity",
++            Self::PairRequest { .. } => "pair-request",
+         }
+     }
+ }
+ 
++#[cfg(test)]
++mod alias_lookup_tests {
++    use super::*;
++
++    #[tokio::test]
++    async fn alias_lookup_round_trips() {
++        let (mut client, mut server) = tokio::io::duplex(4096);
++
++        let sent = ControlMessage::AliasLookupRequest {
++            alias: "my-code".to_string(),
++            lookup_nonce: 42,
++        };
++
++        write_message(&mut client, &sent).await.unwrap();
++
++        match read_message(&mut server).await.unwrap() {
++            ControlMessage::AliasLookupRequest {
++                alias,
++                lookup_nonce,
++            } => {
++                assert_eq!(alias, "my-code");
++                assert_eq!(lookup_nonce, 42);
++            }
++            other => panic!("expected AliasLookupRequest, got {other:?}"),
++        }
++    }
++}
++
+diff --git a/engine/protocol/src/nearby.rs b/engine/protocol/src/nearby.rs
+index 0000000..1111111 100644
+--- a/engine/protocol/src/nearby.rs
++++ b/engine/protocol/src/nearby.rs
+@@ -1,6 +1,13 @@
+ pub fn unpaired_message_allowed(msg: &ControlMessage) -> bool {
+     matches!(
+         msg,
+         ControlMessage::WhoAreYou
+             | ControlMessage::Invite { .. }
+             | ControlMessage::InviteResponse { .. }
+             | ControlMessage::PairRequest { .. }
++            | ControlMessage::AliasLookupRequest { .. }
+     )
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn alias_lookup_policy() {
++        assert!(unpaired_message_allowed(
++            &ControlMessage::AliasLookupRequest {
++                alias: "test-code".to_string(),
++                lookup_nonce: 42,
++            }
++        ));
++
++        assert!(!unpaired_message_allowed(
++            &ControlMessage::AliasLookupResponse {
++                success: true,
++                blob_ticket: Some("ticket".to_string()),
++                error_message: None,
++                lookup_nonce: 42,
++            }
++        ));
++    }
++}
+
 diff --git a/engine/native/src/node.rs b/engine/native/src/node.rs
 index 5555555..6666666 100644
 --- a/engine/native/src/node.rs
@@ -355,52 +435,68 @@ index 5555555..6666666 100644
      pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
      nearby: Arc<Mutex<NearbyRegistry>>,
      unpaired_limiter: Arc<std::sync::Mutex<UnpairedRateLimiter>>,
-+    /// LAN alias registry for current share
 +    lan_alias_registry: Arc<Mutex<LanAliasRegistry>>,
  }
  
- #[derive(Debug, Clone)]
-@@ -570,6 +573,42 @@ impl ControlProtocol {
-                     &sender_name,
-                 );
-             }
-+            ControlMessage::AliasLookupRequest { alias, lookup_nonce } => {
-+                let result = self
-+                    .ctx
-+                    .lan_alias_registry
-+                    .lock()
-+                    .await
-+                    .resolve(&alias);
+@@ -570,6 +573,52 @@ impl ControlProtocol {
++                    ControlMessage::AliasLookupRequest {
++                        alias,
++                        lookup_nonce,
++                    } => {
++                        if !has_direct_path(&conn).await {
++                            let response = ControlMessage::AliasLookupResponse {
++                                success: false,
++                                blob_ticket: None,
++                                error_message: Some(
++                                    "Alias lookup requires a direct LAN connection"
++                                        .to_string(),
++                                ),
++                                lookup_nonce,
++                            };
 +
-+                let response = match result {
-+                    Ok(blob_ticket) => {
-+                        ControlMessage::AliasLookupResponse {
-+                            success: true,
-+                            blob_ticket: Some(blob_ticket),
-+                            error_message: None,
-+                            lookup_nonce,
++                            let _ = write_message(&mut send, &response).await;
++                            continue;
 +                        }
-+                    }
-+                    Err(e) => {
-+                        ControlMessage::AliasLookupResponse {
-+                            success: false,
-+                            blob_ticket: None,
-+                            error_message: Some(e.to_string()),
-+                            lookup_nonce,
-+                        }
-+                    }
-+                };
 +
-+                if let Err(err) = write_message(&mut send, &response).await {
-+                    tracing::debug!("alias lookup response failed: {err:#}");
-+                }
-+            }
-+            ControlMessage::AliasLookupResponse { .. } => {
-+            }
-             ControlMessage::PairRequest {
-                 sender_name,
-                 device_type,
-@@ -782,6 +821,7 @@ pub struct NodeService {
++                        let result = self
++                            .ctx
++                            .lan_alias_registry
++                            .lock()
++                            .await
++                            .resolve(&alias);
++
++                        let response = match result {
++                            Ok(blob_ticket) => ControlMessage::AliasLookupResponse {
++                                success: true,
++                                blob_ticket: Some(blob_ticket),
++                                error_message: None,
++                                lookup_nonce,
++                            },
++                            Err(_) => ControlMessage::AliasLookupResponse {
++                                success: false,
++                                blob_ticket: None,
++                                error_message: Some("Alias not found".to_string()),
++                                lookup_nonce,
++                            },
++                        };
++
++                        if let Err(err) = write_message(&mut send, &response).await {
++                            tracing::debug!(
++                                target: "dashbeam::_events::control::alias_reply_failed",
++                                remote = %remote.fmt_short(),
++                                %err,
++                            );
++                        }
++
++                        continue;
++                    }
++                    ControlMessage::AliasLookupResponse { .. } => {
++                        continue;
++                    }
+                     ControlMessage::PairRequest {
+                         sender_name,
+                         device_type,
+@@ -782,6 +831,7 @@ pub struct NodeService {
      nearby: Arc<Mutex<NearbyRegistry>>,
      lan_discovery: Mutex<Option<LanDiscoveryHandle>>,
      nearby_unavailable: Arc<std::sync::RwLock<Option<String>>>,
@@ -408,15 +504,14 @@ index 5555555..6666666 100644
      unpaired_limiter: Arc<std::sync::Mutex<UnpairedRateLimiter>>,
      blocked: Arc<RwLock<HashSet<String>>>,
      pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
-@@ -860,6 +900,7 @@ impl NodeService {
+@@ -860,6 +910,7 @@ impl NodeService {
          let nearby = Arc::new(Mutex::new(NearbyRegistry::new()));
          let nearby_unavailable: Arc<std::sync::RwLock<Option<String>>> =
              Arc::new(std::sync::RwLock::new(None));
 +        let lan_alias_registry = Arc::new(Mutex::new(LanAliasRegistry::new()));
          let unpaired_limiter = Arc::new(std::sync::Mutex::new(UnpairedRateLimiter::new()));
  
-         let paired_connections = Arc::new(PairedConnectionManager::new(
-@@ -880,6 +921,7 @@ impl NodeService {
+@@ -880,6 +931,7 @@ impl NodeService {
              pairing_host_persistent.clone(),
              app_handle.clone(),
              presence.clone(),
@@ -424,7 +519,7 @@ index 5555555..6666666 100644
              paired_connections.clone(),
              network_ready.clone(),
              relay_mode.clone(),
-@@ -923,6 +965,7 @@ impl NodeService {
+@@ -923,6 +975,7 @@ impl NodeService {
              nearby,
              lan_discovery: Mutex::new(lan_discovery),
              nearby_unavailable,
@@ -432,99 +527,130 @@ index 5555555..6666666 100644
              unpaired_limiter,
              network_transition: Mutex::new(()),
              blocked,
-@@ -1350,6 +1393,24 @@ impl NodeService {
-         Ok(true)
-     }
- 
-+    pub async fn register_lan_alias(&self, alias: &str, blob_ticket: &str) -> anyhow::Result<()> {
+@@ -1350,6 +1403,121 @@ impl NodeService {
++    pub async fn register_lan_alias(
++        &self,
++        alias: &str,
++        blob_ticket: &str,
++    ) -> anyhow::Result<()> {
 +        self.lan_alias_registry
 +            .lock()
 +            .await
 +            .register(alias, blob_ticket)
 +    }
 +
-+    pub async fn clear_lan_alias(&self) -> anyhow::Result<()> {
++    pub async fn clear_lan_alias(&self) {
 +        self.lan_alias_registry.lock().await.clear();
-+        Ok(())
 +    }
 +
-+    pub async fn resolve_lan_alias_over_control(
++    pub async fn query_lan_alias(
 +        &self,
-+        endpoint_id: &str,
++        remote_endpoint_id: &str,
 +        alias: &str,
 +        lookup_nonce: u64,
-+    ) -> anyhow::Result<String> {
-+        use iroh::endpoint::Connection;
-+        use std::str::FromStr;
++    ) -> anyhow::Result<Option<String>> {
++        use anyhow::Context as _;
 +
-+        let remote = EndpointId::from_str(endpoint_id)?;
++        let remote = EndpointId::from_str(remote_endpoint_id)
++            .context("invalid remote endpoint id")?;
 +
-+        let connection = self
-+            .runtime
-+            .connect(remote, "control")
++        let is_nearby = self
++            .nearby
++            .lock()
 +            .await
-+            .map_err(|e| anyhow::anyhow!("Failed to connect to peer: {e}"))?;
++            .list()
++            .into_iter()
++            .any(|device| {
++                device
++                    .endpoint_id
++                    .eq_ignore_ascii_case(remote_endpoint_id)
++            });
 +
-+        let (mut send, mut recv) = connection
-+            .open_bi()
-+            .await
-+            .map_err(|e| anyhow::anyhow!("Failed to open bi stream: {e}"))?;
++        anyhow::ensure!(is_nearby, "device is not on the local network");
 +
-+        let request = ControlMessage::AliasLookupRequest {
-+            alias: alias.to_string(),
-+            lookup_nonce,
++        let endpoint = {
++            let runtime = self.runtime.lock().await;
++            runtime.endpoint.clone()
 +        };
 +
-+        write_message(&mut send, &request)
-+            .await
-+            .map_err(|e| anyhow::anyhow!("Failed to send alias request: {e}"))?;
++        let addr = build_control_connect_addr(&endpoint, remote, None);
 +
-+        let response_fut = tokio::time::timeout(
-+            std::time::Duration::from_secs(3),
-+            read_message(&mut recv),
++        let connection = tokio::time::timeout(
++            Duration::from_secs(PRESENCE_CONNECT_TIMEOUT_SECS),
++            endpoint.connect(addr, CONTROL_ALPN),
++        )
++        .await
++        .context("alias lookup connection timed out")?
++        .context("failed to connect to nearby peer")?;
++
++        anyhow::ensure!(
++            has_direct_path(&connection).await,
++            "alias lookup requires a direct LAN connection"
 +        );
 +
-+        match response_fut.await {
-+            Ok(Ok(msg)) => {
-+                if let ControlMessage::AliasLookupResponse {
++        let (mut send, mut recv) = tokio::time::timeout(
++            Duration::from_secs(5),
++            connection.open_bi(),
++        )
++        .await
++        .context("alias lookup stream timed out")?
++        .context("failed to open alias lookup stream")?;
++
++        write_message(
++            &mut send,
++            &ControlMessage::AliasLookupRequest {
++                alias: alias.to_owned(),
++                lookup_nonce,
++            },
++        )
++        .await
++        .context("failed to send alias lookup request")?;
++
++        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
++
++        loop {
++            let response = tokio::time::timeout_at(
++                deadline,
++                read_message(&mut recv),
++            )
++            .await
++            .context("alias lookup response timed out")?
++            .context("failed to read alias lookup response")?;
++
++            match response {
++                ControlMessage::AliasLookupResponse {
 +                    success,
 +                    blob_ticket,
-+                    error_message,
 +                    lookup_nonce: response_nonce,
-+                } = msg
-+                {
-+                    if response_nonce != lookup_nonce {
-+                        return Err(anyhow::anyhow!(
-+                            "Nonce mismatch: expected {}, got {}",
-+                            lookup_nonce,
-+                            response_nonce
-+                        ));
-+                    }
++                    ..
++                } => {
++                    anyhow::ensure!(
++                        response_nonce == lookup_nonce,
++                        "alias response nonce mismatch"
++                    );
++
 +                    if success {
-+                        Ok(blob_ticket.ok_or_else(|| {
-+                            anyhow::anyhow!("Success response missing blob_ticket")
-+                        })?)
-+                    } else {
-+                        Err(anyhow::anyhow!(
-+                            "Peer error: {}",
-+                            error_message.unwrap_or_else(|| "Unknown error".to_string())
-+                        ))
++                        let ticket = blob_ticket
++                            .filter(|value| !value.trim().is_empty())
++                            .context("peer returned an empty blob ticket")?;
++
++                        return Ok(Some(ticket));
 +                    }
-+                } else {
-+                    Err(anyhow::anyhow!(
-+                        "Unexpected response type: {}",
-+                        msg.kind()
-+                    ))
++
++                    return Ok(None);
++                }
++                ControlMessage::PairingInfo { .. } => continue,
++                other => {
++                    anyhow::bail!(
++                        "unexpected alias lookup response: {}",
++                        other.kind()
++                    );
 +                }
 +            }
-+            Ok(Err(e)) => Err(anyhow::anyhow!("Failed to read response: {e}")),
-+            Err(_) => Err(anyhow::anyhow!("Alias lookup timeout")),
 +        }
 +    }
  
-     async fn deliver_pair_request(&self, remote_endpoint_id: &str) -> anyhow::Result<bool> {
-         let remote = EndpointId::from_str(remote_endpoint_id)?;
-@@ -1630,6 +1691,7 @@ fn build_runtime(
+@@ -1630,6 +1808,7 @@ fn build_runtime(
      pairing_host_persistent: Arc<AtomicBool>,
      app_handle: AppHandle,
      presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
@@ -532,7 +658,7 @@ index 5555555..6666666 100644
      paired_connections: Arc<PairedConnectionManager>,
      network_ready: Arc<AtomicBool>,
      relay_mode: RelayMode,
-@@ -1678,6 +1740,7 @@ fn build_runtime(
+@@ -1678,6 +1857,7 @@ fn build_runtime(
          pending_nearby_invites: pending_nearby_invites.clone(),
          nearby: nearby.clone(),
          unpaired_limiter: unpaired_limiter.clone(),
@@ -540,40 +666,40 @@ index 5555555..6666666 100644
      };
  
      let control_protocol = ControlProtocol { ctx };
+
 diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
 index cccccccc..dddddddd 100644
 --- a/src-tauri/Cargo.toml
 +++ b/src-tauri/Cargo.toml
-@@ -30,6 +30,7 @@ serde = { version = "1.0", features = ["derive"] }
+@@ -30,7 +30,6 @@ serde = { version = "1.0", features = ["derive"] }
  serde_json = "1.0"
  tokio = { version = "1.0", features = ["full"] }
  anyhow = "1.0"
-+futures-util = "0.3"
+-futures-util = "0.3"
  n0-watcher = "1.0"
  iroh = { version = "1.0.3", features = ["platform-verifier"] }
  iroh-blobs = { version = "0.103" }
+
 diff --git a/src-tauri/src/commands.rs b/src-tauri/src/commands.rs
 index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 --- a/src-tauri/src/commands.rs
 +++ b/src-tauri/src/commands.rs
-@@ -1831,6 +1831,178 @@ pub async fn autostart_set(app_handle: tauri::AppHandle, enabled: bool) -> Resu
+@@ -1831,6 +1831,157 @@ pub async fn autostart_set(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), String>
      crate::autostart::set(&app_handle, enabled).await
  }
  
-+#[derive(serde::Serialize)]
-+#[serde(rename_all = "camelCase")]
++#[derive(Debug, serde::Serialize)]
++#[serde(tag = "status", rename_all = "camelCase")]
 +pub enum AliasResolutionOutcome {
-+    #[serde(rename = "uniqueMatch")]
 +    UniqueMatch {
++        #[serde(rename = "blobTicket")]
 +        blob_ticket: String,
 +    },
-+    #[serde(rename = "notFound")]
 +    NotFound,
-+    #[serde(rename = "ambiguous")]
 +    Ambiguous {
++        #[serde(rename = "endpointIds")]
 +        endpoint_ids: Vec<String>,
 +    },
-+    #[serde(rename = "error")]
 +    Error {
 +        message: String,
 +    },
@@ -586,22 +712,30 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +    blob_ticket: String,
 +    state: State<'_, AppStateMutex>,
 +) -> Result<(), String> {
-+    let app_state = state.lock().await;
-+    let node = app_state.node.as_ref().ok_or("Node not initialized")?;
++    let node = {
++        let app_state = state.lock().await;
 +
-+    let current_ticket = app_state
-+        .current_share
-+        .as_ref()
-+        .map(|share| share.ticket.clone())
-+        .ok_or("No active share")?;
++        let node = app_state
++            .node
++            .clone()
++            .ok_or_else(|| "Node not initialized".to_string())?;
 +
-+    if blob_ticket != current_ticket {
-+        return Err("BlobTicket does not match current share".to_string());
-+    }
++        let current_ticket = app_state
++            .current_share
++            .as_ref()
++            .map(|share| share.ticket.clone())
++            .ok_or_else(|| "No active share".to_string())?;
++
++        if blob_ticket != current_ticket {
++            return Err("BlobTicket does not match current share".to_string());
++        }
++
++        node
++    };
 +
 +    node.register_lan_alias(&alias, &blob_ticket)
 +        .await
-+        .map_err(|e| format!("Failed to register alias: {}", e))
++        .map_err(|error| format!("Failed to register alias: {error}"))
 +}
 +
 +#[cfg(any(desktop, target_os = "android"))]
@@ -609,12 +743,16 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +pub async fn clear_lan_alias(
 +    state: State<'_, AppStateMutex>,
 +) -> Result<(), String> {
-+    let app_state = state.lock().await;
-+    let node = app_state.node.as_ref().ok_or("Node not initialized")?;
++    let node = {
++        let app_state = state.lock().await;
++        app_state
++            .node
++            .clone()
++            .ok_or_else(|| "Node not initialized".to_string())?
++    };
 +
-+    node.clear_lan_alias()
-+        .await
-+        .map_err(|e| format!("Failed to clear alias: {}", e))
++    node.clear_lan_alias().await;
++    Ok(())
 +}
 +
 +#[cfg(any(desktop, target_os = "android"))]
@@ -623,14 +761,23 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +    alias: String,
 +    state: State<'_, AppStateMutex>,
 +) -> Result<AliasResolutionOutcome, String> {
-+    let app_state = state.lock().await;
-+    let node = app_state.node.as_ref().ok_or("Node not initialized")?;
++    let normalized =
++        engine::LanAliasRegistry::normalize_alias(&alias)
++            .map_err(|error| error.to_string())?;
++
++    let node = {
++        let app_state = state.lock().await;
++        app_state
++            .node
++            .clone()
++            .ok_or_else(|| "Node not initialized".to_string())?
++    };
 +
 +    let nearby_peers: Vec<_> = node
 +        .list_nearby()
 +        .await
 +        .into_iter()
-+        .filter(|d| d.identified)
++        .filter(|device| device.identified)
 +        .collect();
 +
 +    if nearby_peers.is_empty() {
@@ -639,60 +786,83 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +        });
 +    }
 +
-+    let lookup_nonce = {
-+        use std::collections::hash_map::RandomState;
-+        use std::hash::{BuildHasher, Hasher};
-+        let mut hasher = RandomState::new().build_hasher();
-+        hasher.write_u64(
-+            std::time::SystemTime::now()
-+                .duration_since(std::time::UNIX_EPOCH)
-+                .map(|d| d.as_nanos() as u64)
-+                .unwrap_or(0),
++    let timestamp = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .map(|duration| duration.as_nanos() as u64)
++        .unwrap_or_default();
++
++    static NONCE_COUNTER: std::sync::atomic::AtomicU64 =
++        std::sync::atomic::AtomicU64::new(1);
++
++    let lookup_nonce = timestamp
++        ^ NONCE_COUNTER.fetch_add(
++            1,
++            std::sync::atomic::Ordering::Relaxed,
 +        );
-+        hasher.finish()
-+    };
 +
-+    let mut responses: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-+    let timeout = std::time::Duration::from_secs(5);
++    let mut tasks = tokio::task::JoinSet::new();
 +
-+    let query_futures: Vec<_> = nearby_peers
-+        .iter()
-+        .map(|peer| {
-+            let peer_id = peer.endpoint_id.clone();
-+            let node = node.clone();
-+            let alias = alias.clone();
-+            let nonce = lookup_nonce;
-+            async move {
-+                match tokio::time::timeout(
-+                    timeout,
-+                    node.resolve_lan_alias_over_control(&peer_id, &alias, nonce),
++    for peer in nearby_peers {
++        let node = node.clone();
++        let alias = normalized.clone();
++        let endpoint_id = peer.endpoint_id;
++
++        tasks.spawn(async move {
++            let result = node
++                .query_lan_alias(
++                    &endpoint_id,
++                    &alias,
++                    lookup_nonce,
 +                )
-+                .await
-+                {
-+                    Ok(Ok(ticket)) => Some((peer_id, ticket)),
-+                    _ => None,
-+                }
++                .await;
++
++            (endpoint_id, result)
++        });
++    }
++
++    let mut responses =
++        std::collections::HashMap::<String, String>::new();
++
++    while let Some(joined) = tasks.join_next().await {
++        let Ok((endpoint_id, result)) = joined else {
++            continue;
++        };
++
++        match result {
++            Ok(Some(ticket)) => {
++                responses.insert(endpoint_id, ticket);
 +            }
-+        })
-+        .collect();
-+
-+    let results = futures_util::future::join_all(query_futures).await;
-+
-+    for result in results {
-+        if let Some((endpoint_id, ticket)) = result {
-+            responses.insert(endpoint_id, ticket);
++            Ok(None) => {}
++            Err(error) => {
++                tracing::debug!(
++                    target: "dashbeam::_events::control::alias_lookup_failed",
++                    %endpoint_id,
++                    %error,
++                );
++            }
 +        }
 +    }
 +
 +    match responses.len() {
 +        0 => Ok(AliasResolutionOutcome::NotFound),
 +        1 => {
-+            let blob_ticket = responses.into_values().next().unwrap();
-+            Ok(AliasResolutionOutcome::UniqueMatch { blob_ticket })
++            let blob_ticket = responses
++                .into_values()
++                .next()
++                .expect("one alias response");
++
++            Ok(AliasResolutionOutcome::UniqueMatch {
++                blob_ticket,
++            })
 +        }
 +        _ => {
-+            let endpoint_ids = responses.into_keys().collect();
-+            Ok(AliasResolutionOutcome::Ambiguous { endpoint_ids })
++            let mut endpoint_ids: Vec<_> =
++                responses.into_keys().collect();
++            endpoint_ids.sort();
++
++            Ok(AliasResolutionOutcome::Ambiguous {
++                endpoint_ids,
++            })
 +        }
 +    }
 +}
@@ -723,10 +893,7 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +) -> Result<AliasResolutionOutcome, String> {
 +    Err("LAN alias not available on this platform".to_string())
 +}
-+
- #[cfg(test)]
- mod tests {
-     use super::*;
+
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
 index 00674c4ea806e1318e3b2c1c54c38560ff5477dc..22222222222222222222222 100644
 --- a/src-tauri/src/lib.rs
@@ -741,326 +908,454 @@ index 00674c4ea806e1318e3b2c1c54c38560ff5477dc..22222222222222222222222 100644
              stop_sharing,
              receive_file,
              cancel_receive,
-@@ -421,6 +424,11 @@ pub async fn stop_sharing(state: State<'_, AppStateMutex>) -> Result<(), String
+@@ -421,6 +424,11 @@ pub async fn stop_sharing(state: State<'_, AppStateMutex>) -> Result<(), String> {
              return Err(e);
          }
  
 +        #[cfg(any(desktop, target_os = "android"))]
 +        if let Some(node) = app_state.node.as_ref() {
-+            node.clear_lan_alias().await.ok();
++            node.clear_lan_alias().await;
 +        }
 +
          #[cfg(target_os = "android")]
          std::fs::remove_dir_all(&share._path);
-     }
+
 diff --git a/frontend/src/components/sender/Sender.tsx b/frontend/src/components/sender/Sender.tsx
 index 2ec592da6750bac92291c03f40e503589adb0076..3b3c3c3c3c3c3c3c 100644
 --- a/frontend/src/components/sender/Sender.tsx
 +++ b/frontend/src/components/sender/Sender.tsx
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,4 @@
  import { StopCircleIcon } from 'lucide-react'
-+import { useState } from 'react'
- import { useEffect } from 'react'
+-import { useEffect } from 'react'
++import { useEffect, useState } from 'react'
  import { useSender } from '../../hooks/useSender'
  import { useTranslation } from '../../i18n/react-i18next-compat'
-@@ -7,6 +8,7 @@ import { useSenderStore } from '../../store/sender-store'
- import { TransferSuccessScreen } from '../common/TransferSuccessScreen'
+ import { useSenderStore } from '../../store/sender-store'
+@@ -7,6 +7,7 @@ import { useSenderStore } from '../../store/sender-store'
  import {
- 	AlertDialog,
-+	AlertDialogAction,
- 	AlertDialogClose,
- 	AlertDialogContent,
- 	AlertDialogDescription,
-@@ -17,6 +19,23 @@ import { Button } from '../ui/button'
+     AlertDialog,
+-    AlertDialogAction,
+     AlertDialogClose,
+     AlertDialogContent,
+     AlertDialogDescription,
+@@ -17,6 +18,16 @@ import { Button } from '../ui/button'
  import { DragDrop } from './DragDrop'
  import { ShareActionCard } from './ShareActionCard'
  import { SharingActiveCard } from './SharingActiveCard'
 +import {
-+	Dialog,
-+	DialogClose,
-+	DialogContent,
-+	DialogDescription,
-+	DialogFooter,
-+	DialogHeader,
-+	DialogTitle,
++    Dialog,
++    DialogClose,
++    DialogContent,
++    DialogDescription,
++    DialogFooter,
++    DialogHeader,
++    DialogTitle,
 +} from '../ui/dialog'
 +import { Input } from '../ui/input'
 +import { Label } from '../ui/label'
-+import { invoke } from '@tauri-apps/api/tauri'
++import { invoke } from '@/lib/platform-api'
  
  interface SenderProps {
- 	onTransferStateChange: (isSharing: boolean) => void
-@@ -24,6 +43,8 @@ interface SenderProps {
- 
+     onTransferStateChange: (isSharing: boolean) => void
+@@ -24,6 +34,12 @@ interface SenderProps {
  export function Sender({ onTransferStateChange }: SenderProps) {
- 	const [showAliasDialog, setShowAliasDialog] = useState(false)
-+	const [lanAlias, setLanAlias] = useState('')
-+	const [isRegisteringAlias, setIsRegisteringAlias] = useState(false)
-+	const [aliasError, setAliasError] = useState<string | null>(null)
- 	const {
- 		viewState,
- 		isSharing,
-@@ -70,6 +91,45 @@ export function Sender({ onTransferStateChange }: SenderProps) {
- 		}
- 	}, [viewState, isBroadcastMode, setIsBroadcastMode])
+     const [showAliasDialog, setShowAliasDialog] = useState(false)
++    const [lanAlias, setLanAlias] = useState('')
++    const [registeredAlias, setRegisteredAlias] = useState<string | null>(null)
++    const [isRegisteringAlias, setIsRegisteringAlias] = useState(false)
++    const [aliasError, setAliasError] = useState<string | null>(null)
  
-+	const validateAlias = (alias: string): boolean => {
-+		const normalized = alias.trim().toLowerCase()
-+		if (normalized.length < 4 || normalized.length > 32) {
-+			setAliasError('Alias must be 4-32 characters')
-+			return false
-+		}
-+		if (!/^[a-z0-9_-]+$/.test(normalized)) {
-+			setAliasError('Alias must contain only [a-z0-9_-]')
-+			return false
-+		}
-+		return true
-+	}
+@@ -70,6 +86,57 @@ export function Sender({ onTransferStateChange }: SenderProps) {
+         }
+     }, [viewState, isBroadcastMode, setIsBroadcastMode])
+ 
++    const validateAlias = (alias: string): boolean => {
++        const normalized = alias.trim().toLowerCase()
 +
-+	const handleRegisterAlias = async () => {
-+		setAliasError(null)
-+		const trimmed = lanAlias.trim()
-+		if (!trimmed) return
-+		if (!validateAlias(trimmed)) return
++        if (normalized.length < 4 || normalized.length > 32) {
++            setAliasError('Alias must be 4–32 characters.')
++            return false
++        }
 +
-+		setIsRegisteringAlias(true)
-+		try {
-+			await invoke('register_lan_alias', {
-+				alias: trimmed,
-+				blob_ticket: ticket,
-+			})
-+			setLanAlias('')
-+			setShowAliasDialog(false)
-+		} catch (err) {
-+			setAliasError(`Failed to register: ${err}`)
-+		} finally {
-+			setIsRegisteringAlias(false)
-+		}
-+	}
++        if (!/^[a-z0-9_-]+$/.test(normalized)) {
++            setAliasError(
++                'Use only letters, numbers, hyphens and underscores.'
++            )
++            return false
++        }
 +
-+	const closeAliasDialog = () => {
-+		setShowAliasDialog(false)
-+		setAliasError(null)
-+		setLanAlias('')
-+	}
++        return true
++    }
++
++    const handleRegisterAlias = async () => {
++        setAliasError(null)
++
++        const normalized = lanAlias.trim().toLowerCase()
++
++        if (!ticket) {
++            setAliasError('No active share is available.')
++            return
++        }
++
++        if (!validateAlias(normalized)) return
++
++        setIsRegisteringAlias(true)
++
++        try {
++            await invoke<void>('register_lan_alias', {
++                alias: normalized,
++                blobTicket: ticket,
++            })
++
++            setRegisteredAlias(normalized)
++            setShowAliasDialog(false)
++        } catch (error) {
++            setAliasError(`Failed to register alias: ${String(error)}`)
++        } finally {
++            setIsRegisteringAlias(false)
++        }
++    }
++
++    const closeAliasDialog = () => {
++        setShowAliasDialog(false)
++        setAliasError(null)
++    }
++
++    useEffect(() => {
++        if (viewState === 'IDLE') {
++            setLanAlias('')
++            setRegisteredAlias(null)
++            setAliasError(null)
++            setShowAliasDialog(false)
++        }
++    }, [viewState])
++
+     return (
+         <div className="p-0 sm:p-6 space-y-6 relative h-[65dvh] sm:h-112 overflow-y-auto flex flex-col">
+@@ -145,6 +212,79 @@ export function Sender({ onTransferStateChange }: SenderProps) {
+             )}
  
- 	return (
- 		<div className="p-0 sm:p-6 space-y-6 relative h-[65dvh] sm:h-112 overflow-y-auto flex flex-col">
-@@ -145,6 +195,44 @@ export function Sender({ onTransferStateChange }: SenderProps) {
- 				</div>
- 			)}
++            <div className="mt-3 space-y-2">
++                <Button
++                    type="button"
++                    variant="outline"
++                    className="w-full"
++                    onClick={() => setShowAliasDialog(true)}
++                    disabled={!ticket}
++                >
++                    {registeredAlias
++                        ? `LAN alias: ${registeredAlias}`
++                        : 'Set LAN alias'}
++                </Button>
++
++                {registeredAlias ? (
++                    <p className="text-center text-xs text-muted-foreground">
++                        The receiver can enter <strong>{registeredAlias}</strong>{' '}
++                        while connected to the same LAN or hotspot.
++                    </p>
++                ) : null}
++            </div>
++
++            <Dialog
++                open={showAliasDialog}
++                onOpenChange={(open) => {
++                    if (open) {
++                        setShowAliasDialog(true)
++                    } else {
++                        closeAliasDialog()
++                    }
++                }}
++            >
++                <DialogContent>
++                    <DialogHeader>
++                        <DialogTitle>LAN Alias</DialogTitle>
++                        <DialogDescription>
++                            Create an easy-to-type code for this active share.
++                            Both devices must be connected to the same LAN or
++                            hotspot.
++                        </DialogDescription>
++                    </DialogHeader>
++
++                    <div className="space-y-4 px-6 pb-2">
++                        <div className="space-y-2">
++                            <Label htmlFor="alias-input">Alias</Label>
++                            <Input
++                                id="alias-input"
++                                placeholder="e.g. mycode123"
++                                value={lanAlias}
++                                onChange={(event) => {
++                                    setLanAlias(event.target.value)
++                                    setAliasError(null)
++                                }}
++                                onKeyDown={(event) => {
++                                    if (event.key === 'Enter') {
++                                        event.preventDefault()
++                                        void handleRegisterAlias()
++                                    }
++                                }}
++                                disabled={isRegisteringAlias}
++                                autoCapitalize="none"
++                                autoCorrect="off"
++                                maxLength={32}
++                            />
++                            <p className="text-xs text-muted-foreground">
++                                4–32 characters; letters, numbers, hyphens and
++                                underscores.
++                            </p>
++                        </div>
++
++                        {aliasError ? (
++                            <p role="alert" className="text-sm text-destructive">
++                                {aliasError}
++                            </p>
++                        ) : null}
++                    </div>
++
++                    <DialogFooter>
++                        <DialogClose
++                            render={
++                                <Button
++                                    type="button"
++                                    variant="secondary"
++                                    onClick={closeAliasDialog}
++                                >
++                                    {t('common:cancel')}
++                                </Button>
++                            }
++                        />
++
++                        <Button
++                            type="button"
++                            onClick={() => void handleRegisterAlias()}
++                            disabled={
++                                isRegisteringAlias ||
++                                !lanAlias.trim() ||
++                                !ticket
++                            }
++                        >
++                            {isRegisteringAlias
++                                ? 'Registering…'
++                                : 'Register alias'}
++                        </Button>
++                    </DialogFooter>
++                </DialogContent>
++            </Dialog>
  
-+			{/* LAN Alias Dialog */}
-+			<Dialog open={viewState === 'SHARING'}>
-+				<DialogContent>
-+					<DialogHeader>
-+						<DialogTitle>LAN Alias (Optional)</DialogTitle>
-+						<DialogDescription>
-+							Share an easy-to-type alias instead of long tickets on the same WiFi/LAN.
-+						</DialogDescription>
-+					</DialogHeader>
-+					<div className="space-y-4">
-+						<div>
-+							<Label htmlFor="alias-input">Alias</Label>
-+							<Input
-+								id="alias-input"
-+								placeholder="e.g., mycode123"
-+								value={lanAlias}
-+								onChange={(e) => setLanAlias(e.target.value)}
-+								disabled={isRegisteringAlias}
-+								maxLength={32}
-+							/>
-+							<p className="text-xs text-muted-foreground mt-1">
-+								4-32 characters, [a-z0-9_-] only. Optional.
-+							</p>
-+						</div>
-+						{aliasError && (
-+							<p className="text-sm text-red-500">{aliasError}</p>
-+						)}
-+					</div>
-+					<DialogFooter>
-+						<DialogClose
-+							render={<Button variant="secondary" onClick={closeAliasDialog}>{t('common:cancel')}</Button>}
-+						/>
-+						<Button onClick={handleRegisterAlias} disabled={isRegisteringAlias || !lanAlias.trim()}>
-+							{isRegisteringAlias ? 'Registering...' : 'Register Alias'}
-+						</Button>
-+					</DialogFooter>
-+				</DialogContent>
-+			</Dialog>
- 
- 			<AlertDialog open={alertDialog.isOpen} onOpenChange={closeAlert}>
- 				<AlertDialogContent>
+             <AlertDialog open={alertDialog.isOpen} onOpenChange={closeAlert}>
+                 <AlertDialogContent>
+
 diff --git a/frontend/src/components/receiver/Receiver.tsx b/frontend/src/components/receiver/Receiver.tsx
 index 14a869ded3677bde64eb35f1e72a8b62b3322fc4..5c5c5c5c5c5c5c5c 100644
 --- a/frontend/src/components/receiver/Receiver.tsx
 +++ b/frontend/src/components/receiver/Receiver.tsx
-@@ -1,6 +1,7 @@
+@@ -1,6 +1,6 @@
  import { Info } from 'lucide-react'
  import { useEffect, useState } from 'react'
  import { useReceiverContext } from './ReceiverProvider'
-+import { invoke } from '@tauri-apps/api/tauri'
+-import { invoke } from '@tauri-apps/api/tauri'
++import { invoke } from '@/lib/platform-api'
  import { useTranslation } from '../../i18n/react-i18next-compat'
  import { PulseAnimation } from '../common/PulseAnimation'
  import { TransferSuccessScreen } from '../common/TransferSuccessScreen'
-@@ -8,6 +9,13 @@ import {
- 	Dialog,
- 	DialogClose,
- 	DialogContent,
-+	DialogDescription,
-+	DialogFooter,
-+	DialogHeader,
-+	DialogTitle,
- } from '../ui/dialog'
-+import { Input } from '../ui/input'
-+import { Label } from '../ui/label'
-+import { Button } from '../ui/button'
- import { ReceivingActiveCard } from './ReceivingActiveCard'
- import { TicketInput } from './TicketInput'
- import { ReceiveSaveLocationPicker } from './ReceiveSaveLocationPicker'
-@@ -25,6 +33,10 @@ interface ReceiverProps {
+@@ -25,6 +25,25 @@ interface ReceiverProps {
  export function Receiver({ onTransferStateChange }: ReceiverProps) {
- 	const [showInstructionsDialog, setShowInstructionsDialog] = useState(false)
-+	const [showAliasDialog, setShowAliasDialog] = useState(false)
-+	const [aliasInput, setAliasInput] = useState('')
-+	const [isResolvingAlias, setIsResolvingAlias] = useState(false)
-+	const [aliasError, setAliasError] = useState<string | null>(null)
- 	const { t } = useTranslation()
+     const [showInstructionsDialog, setShowInstructionsDialog] = useState(false)
+     const [showAliasDialog, setShowAliasDialog] = useState(false)
+     const [aliasInput, setAliasInput] = useState('')
+     const [isResolvingAlias, setIsResolvingAlias] = useState(false)
+     const [aliasError, setAliasError] = useState<string | null>(null)
  
- 	const {
-@@ -50,6 +62,89 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
- 	useEffect(() => {
- 		onTransferStateChange(isReceiving)
- 	}, [isReceiving, onTransferStateChange])
++    type AliasResolutionOutcome =
++        | {
++              status: 'uniqueMatch'
++              blobTicket: string
++          }
++        | {
++              status: 'notFound'
++          }
++        | {
++              status: 'ambiguous'
++              endpointIds: string[]
++          }
++        | {
++              status: 'error'
++              message: string
++          }
 +
-+	const validateAlias = (alias: string): boolean => {
-+		const normalized = alias.trim().toLowerCase()
-+		if (normalized.length < 4 || normalized.length > 32) {
-+			setAliasError('Alias must be 4-32 characters')
-+			return false
-+		}
-+		if (!/^[a-z0-9_-]+$/.test(normalized)) {
-+			setAliasError('Alias must contain only [a-z0-9_-]')
-+			return false
-+		}
-+		return true
-+	}
-+
-+	const handleResolveAlias = async () => {
-+		setAliasError(null)
-+
-+		const trimmed = aliasInput.trim()
-+		if (!trimmed) {
-+			setAliasError('Please enter an alias')
-+			return
-+		}
-+
-+		if (!validateAlias(trimmed)) {
-+			return
-+		}
-+
-+		setIsResolvingAlias(true)
-+
-+		try {
-+			const result: any = await invoke('resolve_lan_alias', {
-+				alias: trimmed,
-+			})
-+			
-+			if (result.uniqueMatch) {
-+				handleTicketChange(result.uniqueMatch.blob_ticket)
-+				setShowAliasDialog(false)
-+				setAliasInput('')
-+			} else if (result.notFound) {
-+				setAliasError(
-+					'Alias not found. Make sure sender is on the same LAN and has registered it.'
-+				)
-+			} else if (result.ambiguous) {
-+				setAliasError(
-+					`Alias found on multiple peers: ${result.ambiguous.endpoint_ids.join(', ')}. Ask sender to use a different alias.`
-+				)
-+			} else if (result.error) {
-+				setAliasError(result.error.message)
-+			} else {
-+				setAliasError('Unknown resolution outcome')
-+			}
-+		} catch (err) {
-+			setAliasError(`Failed to resolve alias: ${err}`)
-+		} finally {
-+			setIsResolvingAlias(false)
-+		}
-+	}
-+
-+	const closeAliasDialog = () => {
-+		setShowAliasDialog(false)
-+		setAliasInput('')
-+		setAliasError(null)
-+	}
+@@ -50,6 +69,65 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
+     useEffect(() => {
+         onTransferStateChange(isReceiving)
+     }, [isReceiving, onTransferStateChange])
  
- 	return (
- 		<div className="p-2 sm:p-6 space-y-6 relative h-[62dvh] sm:h-112 overflow-y-auto flex flex-col">
-@@ -77,6 +172,17 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
- 					</div>
++    const validateAlias = (alias: string): boolean => {
++        const normalized = alias.trim().toLowerCase()
++
++        if (normalized.length < 4 || normalized.length > 32) {
++            setAliasError('Alias must be 4–32 characters.')
++            return false
++        }
++
++        if (!/^[a-z0-9_-]+$/.test(normalized)) {
++            setAliasError(
++                'Use only letters, numbers, hyphens and underscores.'
++            )
++            return false
++        }
++
++        return true
++    }
++
++    const handleResolveAlias = async () => {
++        setAliasError(null)
++
++        const normalized = aliasInput.trim().toLowerCase()
++
++        if (!normalized) {
++            setAliasError('Please enter an alias.')
++            return
++        }
++
++        if (!validateAlias(normalized)) return
++
++        setIsResolvingAlias(true)
++
++        try {
++            const result = await invoke<AliasResolutionOutcome>(
++                'resolve_lan_alias',
++                { alias: normalized }
++            )
++
++            switch (result.status) {
++                case 'uniqueMatch':
++                    handleTicketChange(result.blobTicket)
++                    setShowAliasDialog(false)
++                    setAliasInput('')
++                    return
++
++                case 'notFound':
++                    setAliasError(
++                        'Alias not found. Make sure both devices are on the same LAN or hotspot.'
++                    )
++                    return
++
++                case 'ambiguous':
++                    setAliasError(
++                        `Multiple senders use this alias: ${result.endpointIds.join(', ')}`
++                    )
++                    return
++
++                case 'error':
++                    setAliasError(result.message)
++                    return
++            }
++        } catch (error) {
++            setAliasError(`Failed to resolve alias: ${String(error)}`)
++        } finally {
++            setIsResolvingAlias(false)
++        }
++    }
++
++    const closeAliasDialog = () => {
++        setShowAliasDialog(false)
++        setAliasInput('')
++        setAliasError(null)
++    }
++
+@@ -77,6 +153,11 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
+                     </div>
  
- 					<div className="space-y-4 flex-1 flex flex-col">
-+						<Button
-+							variant="outline"
-+							onClick={() => setShowAliasDialog(true)}
-+							className="w-full"
-+							disabled={isReceiving}
-+						>
-+							{t('common:receiver.resolveLanAlias') || 'Receive via LAN Alias'}
-+						</Button>
+                     <div className="space-y-4 flex-1 flex flex-col">
++                        <Button
++                            variant="outline"
++                            onClick={() => setShowAliasDialog(true)}
++                            className="w-full"
++                            disabled={isReceiving}
++                        >
++                            {t('common:receiver.resolveLanAlias') ||
++                                'Receive via LAN Alias'}
++                        </Button>
 +
- 						<ReceiveSaveLocationPicker
- 							savePath={savePath}
- 							disabled={isReceiving}
-@@ -165,6 +271,49 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
- 			</Dialog>
+                         <ReceiveSaveLocationPicker
+                             savePath={savePath}
+                             disabled={isReceiving}
+@@ -165,6 +246,70 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
+             </Dialog>
+ 
++            <Dialog
++                open={showAliasDialog}
++                onOpenChange={(open) => {
++                    if (open) {
++                        setShowAliasDialog(true)
++                    } else {
++                        closeAliasDialog()
++                    }
++                }}
++            >
++                <DialogContent>
++                    <DialogHeader>
++                        <DialogTitle>Receive via LAN Alias</DialogTitle>
++                        <DialogDescription>
++                            Enter the alias provided by the sender. Both devices
++                            must be on the same LAN or hotspot.
++                        </DialogDescription>
++                    </DialogHeader>
 +
-+			{/* LAN Alias Resolution Dialog */}
-+			<Dialog open={showAliasDialog} onOpenChange={closeAliasDialog}>
-+				<DialogContent>
-+					<DialogHeader>
-+						<DialogTitle>Receive via LAN Alias</DialogTitle>
-+						<DialogDescription>
-+							Enter the alias the sender provided to discover and receive files.
-+						</DialogDescription>
-+					</DialogHeader>
-+					<div className="space-y-4">
-+						<div>
-+							<Label htmlFor="alias-resolve-input">Alias</Label>
-+							<Input
-+								id="alias-resolve-input"
-+								placeholder="e.g., mycode123"
-+								value={aliasInput}
-+								onChange={(e) => setAliasInput(e.target.value)}
-+								disabled={isResolvingAlias}
-+								maxLength={32}
-+								onKeyDown={(e) => {
-+									if (e.key === 'Enter') {
-+										handleResolveAlias()
-+									}
-+								}}
-+							/>
-+						</div>
-+						{aliasError && (
-+							<p className="text-sm text-red-500">{aliasError}</p>
-+						)}
-+					</div>
-+					<DialogFooter>
-+						<DialogClose
-+							render={
-+								<Button variant="secondary" onClick={closeAliasDialog}>
-+									{t('common:cancel')}
-+								</Button>
-+							}
-+						/>
-+						<Button onClick={handleResolveAlias} disabled={isResolvingAlias || !aliasInput.trim()}>
-+							{isResolvingAlias ? 'Discovering...' : 'Resolve & Receive'}
-+						</Button>
-+					</DialogFooter>
-+				</DialogContent>
-+			</Dialog>
- 		</div>
- 	)
++                    <div className="space-y-4 px-6 pb-2">
++                        <div className="space-y-2">
++                            <Label htmlFor="alias-resolve-input">Alias</Label>
++                            <Input
++                                id="alias-resolve-input"
++                                placeholder="e.g. mycode123"
++                                value={aliasInput}
++                                onChange={(event) => {
++                                    setAliasInput(event.target.value)
++                                    setAliasError(null)
++                                }}
++                                onKeyDown={(event) => {
++                                    if (event.key === 'Enter') {
++                                        event.preventDefault()
++                                        void handleResolveAlias()
++                                    }
++                                }}
++                                disabled={isResolvingAlias}
++                                autoCapitalize="none"
++                                autoCorrect="off"
++                                maxLength={32}
++                            />
++                        </div>
++
++                        {aliasError ? (
++                            <p role="alert" className="text-sm text-destructive">
++                                {aliasError}
++                            </p>
++                        ) : null}
++                    </div>
++
++                    <DialogFooter>
++                        <DialogClose
++                            render={
++                                <Button
++                                    type="button"
++                                    variant="secondary"
++                                    onClick={closeAliasDialog}
++                                >
++                                    {t('common:cancel')}
++                                </Button>
++                            }
++                        />
++
++                        <Button
++                            type="button"
++                            onClick={() => void handleResolveAlias()}
++                            disabled={
++                                isResolvingAlias || !aliasInput.trim()
++                            }
++                        >
++                            {isResolvingAlias ? 'Discovering…' : 'Use alias'}
++                        </Button>
++                    </DialogFooter>
++                </DialogContent>
++            </Dialog>
+         </div>
+     )
  }
