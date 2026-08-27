@@ -448,11 +448,78 @@ index 5555555..6666666 100644
 +        Ok(())
 +    }
 +
-+    pub async fn resolve_lan_alias_internal(&self, alias: &str) -> anyhow::Result<String> {
-+        self.lan_alias_registry
-+            .lock()
++    pub async fn resolve_lan_alias_over_control(
++        &self,
++        endpoint_id: &str,
++        alias: &str,
++        lookup_nonce: u64,
++    ) -> anyhow::Result<String> {
++        use iroh::endpoint::Connection;
++        use std::str::FromStr;
++
++        let remote = EndpointId::from_str(endpoint_id)?;
++
++        let connection = self
++            .runtime
++            .connect(remote, "control")
 +            .await
-+            .resolve(alias)
++            .map_err(|e| anyhow::anyhow!("Failed to connect to peer: {e}"))?;
++
++        let (mut send, mut recv) = connection
++            .open_bi()
++            .await
++            .map_err(|e| anyhow::anyhow!("Failed to open bi stream: {e}"))?;
++
++        let request = ControlMessage::AliasLookupRequest {
++            alias: alias.to_string(),
++            lookup_nonce,
++        };
++
++        write_message(&mut send, &request)
++            .await
++            .map_err(|e| anyhow::anyhow!("Failed to send alias request: {e}"))?;
++
++        let response_fut = tokio::time::timeout(
++            std::time::Duration::from_secs(3),
++            read_message(&mut recv),
++        );
++
++        match response_fut.await {
++            Ok(Ok(msg)) => {
++                if let ControlMessage::AliasLookupResponse {
++                    success,
++                    blob_ticket,
++                    error_message,
++                    lookup_nonce: response_nonce,
++                } = msg
++                {
++                    if response_nonce != lookup_nonce {
++                        return Err(anyhow::anyhow!(
++                            "Nonce mismatch: expected {}, got {}",
++                            lookup_nonce,
++                            response_nonce
++                        ));
++                    }
++                    if success {
++                        Ok(blob_ticket.ok_or_else(|| {
++                            anyhow::anyhow!("Success response missing blob_ticket")
++                        })?)
++                    } else {
++                        Err(anyhow::anyhow!(
++                            "Peer error: {}",
++                            error_message.unwrap_or_else(|| "Unknown error".to_string())
++                        ))
++                    }
++                } else {
++                    Err(anyhow::anyhow!(
++                        "Unexpected response type: {}",
++                        msg.kind()
++                    ))
++                }
++            }
++            Ok(Err(e)) => Err(anyhow::anyhow!("Failed to read response: {e}")),
++            Err(_) => Err(anyhow::anyhow!("Alias lookup timeout")),
++        }
 +    }
  
      async fn deliver_pair_request(&self, remote_endpoint_id: &str) -> anyhow::Result<bool> {
@@ -489,7 +556,7 @@ diff --git a/src-tauri/src/commands.rs b/src-tauri/src/commands.rs
 index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 --- a/src-tauri/src/commands.rs
 +++ b/src-tauri/src/commands.rs
-@@ -1831,6 +1831,164 @@ pub async fn autostart_set(app_handle: tauri::AppHandle, enabled: bool) -> Resu
+@@ -1831,6 +1831,178 @@ pub async fn autostart_set(app_handle: tauri::AppHandle, enabled: bool) -> Resu
      crate::autostart::set(&app_handle, enabled).await
  }
  
@@ -594,10 +661,11 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +            let peer_id = peer.endpoint_id.clone();
 +            let node = node.clone();
 +            let alias = alias.clone();
++            let nonce = lookup_nonce;
 +            async move {
 +                match tokio::time::timeout(
 +                    timeout,
-+                    node.resolve_lan_alias_internal(&alias),
++                    node.resolve_lan_alias_over_control(&peer_id, &alias, nonce),
 +                )
 +                .await
 +                {
