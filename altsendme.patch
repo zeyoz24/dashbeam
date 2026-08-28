@@ -1,3 +1,5 @@
+Worked for 11s
+
 diff --git a/engine/native/src/lib.rs b/engine/native/src/lib.rs
 index 1111111..2222222 100644
 --- a/engine/native/src/lib.rs
@@ -10,13 +12,12 @@ index 1111111..2222222 100644
  pub mod node;
  pub mod paired_connections;
 +pub use lan_alias::LanAliasRegistry;
-
 diff --git a/engine/native/src/lan_alias.rs b/engine/native/src/lan_alias.rs
 new file mode 100644
 index 0000000..1111111
 --- /dev/null
 +++ b/engine/native/src/lan_alias.rs
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,365 @@
 +use anyhow::anyhow;
 +use anyhow::Result;
 +use std::collections::HashMap;
@@ -63,7 +64,7 @@ index 0000000..1111111
 +
 +        if !normalized
 +            .chars()
-+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
++            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 +        {
 +            return Err(anyhow!("Alias must contain only [a-z0-9_-]"));
 +        }
@@ -73,6 +74,12 @@ index 0000000..1111111
 +
 +    pub fn register(&mut self, alias: &str, blob_ticket: &str) -> Result<()> {
 +        let normalized = Self::normalize_alias(alias)?;
++
++        if blob_ticket.trim().is_empty() {
++            return Err(anyhow!("BlobTicket must not be empty"));
++        }
++
++        self.prune_expired();
 +
 +        if self.aliases.contains_key(&normalized) {
 +            return Err(anyhow!("Alias already registered"));
@@ -92,18 +99,21 @@ index 0000000..1111111
 +    pub fn resolve(&mut self, alias: &str) -> Result<String> {
 +        let normalized = Self::normalize_alias(alias)?;
 +
-+        if let Some(entry) = self.aliases.get(&normalized) {
-+            let elapsed = entry.registered_at.elapsed();
++        let Some(entry) = self.aliases.get(&normalized) else {
++            return Err(anyhow!("Alias not found"));
++        };
 +
-+            if elapsed > Duration::from_secs(ALIAS_TTL_SECS) {
-+                self.aliases.remove(&normalized);
-+                return Err(anyhow!("Alias expired"));
-+            }
-+
-+            return Ok(entry.blob_ticket.clone());
++        if entry.registered_at.elapsed() >= Duration::from_secs(ALIAS_TTL_SECS) {
++            self.aliases.remove(&normalized);
++            return Err(anyhow!("Alias expired"));
 +        }
 +
-+        Err(anyhow!("Alias not found"))
++        if entry.blob_ticket.trim().is_empty() {
++            self.aliases.remove(&normalized);
++            return Err(anyhow!("Invalid BlobTicket"));
++        }
++
++        Ok(entry.blob_ticket.clone())
 +    }
 +
 +    pub fn clear(&mut self) {
@@ -111,10 +121,9 @@ index 0000000..1111111
 +    }
 +
 +    pub fn prune_expired(&mut self) {
-+        let now = Instant::now();
-+        self.aliases.retain(|_, entry| {
-+            now.duration_since(entry.registered_at) < Duration::from_secs(ALIAS_TTL_SECS)
-+        });
++        let ttl = Duration::from_secs(ALIAS_TTL_SECS);
++        self.aliases
++            .retain(|_, entry| entry.registered_at.elapsed() < ttl);
 +    }
 +}
 +
@@ -123,165 +132,76 @@ index 0000000..1111111
 +    use super::*;
 +
 +    #[test]
-+    fn test_normalize_valid() {
-+        let cases = vec![
-+            ("MyCode123", "mycode123"),
-+            ("  foo-bar_42  ", "foo-bar_42"),
-+            ("UPPERCASE", "uppercase"),
-+        ];
-+        for (input, expected) in cases {
-+            let result = LanAliasRegistry::normalize_alias(input).unwrap();
-+            assert_eq!(result, expected);
++    fn normalization_and_ascii_validation() {
++        assert_eq!(
++            LanAliasRegistry::normalize_alias("  MyCode123  ").unwrap(),
++            "mycode123"
++        );
++        assert_eq!(
++            LanAliasRegistry::normalize_alias("UPPERCASE").unwrap(),
++            "uppercase"
++        );
++
++        for value in ["café", "日本語", "naïve", "Übung"] {
++            assert!(LanAliasRegistry::normalize_alias(value).is_err());
 +        }
 +    }
 +
 +    #[test]
-+    fn test_normalize_rejects_non_ascii() {
-+        let cases = vec!["café", "日本語", "naïve", "Übung"];
-+        for input in cases {
-+            let result = LanAliasRegistry::normalize_alias(input);
-+            assert!(result.is_err());
-+            assert!(result.unwrap_err().to_string().contains("ASCII"));
++    fn normalization_rejects_invalid_characters() {
++        for value in ["foo@bar", "code#123", "test.com", "foo bar"] {
++            assert!(LanAliasRegistry::normalize_alias(value).is_err());
 +        }
 +    }
 +
 +    #[test]
-+    fn test_normalize_too_short() {
++    fn normalization_rejects_invalid_lengths() {
 +        assert!(LanAliasRegistry::normalize_alias("foo").is_err());
++        assert!(LanAliasRegistry::normalize_alias(&"a".repeat(33)).is_err());
 +    }
 +
 +    #[test]
-+    fn test_normalize_too_long() {
-+        let long = "a".repeat(33);
-+        assert!(LanAliasRegistry::normalize_alias(&long).is_err());
-+    }
-+
-+    #[test]
-+    fn test_normalize_invalid_chars() {
-+        let cases = vec!["foo@bar", "code#123", "test.com", "foo bar"];
-+        for input in cases {
-+            assert!(LanAliasRegistry::normalize_alias(input).is_err());
-+        }
-+    }
-+
-+    #[test]
-+    fn test_register_and_resolve() {
++    fn register_and_resolve() {
 +        let mut registry = LanAliasRegistry::new();
-+        let ticket = "real_blob_ticket_xyz";
-+        registry.register("myalias", ticket).unwrap();
++        registry
++            .register("MyAlias", "real_blob_ticket_xyz")
++            .unwrap();
 +
-+        let resolved = registry.resolve("myalias").unwrap();
-+        assert_eq!(resolved, ticket);
++        assert_eq!(
++            registry.resolve("myalias").unwrap(),
++            "real_blob_ticket_xyz"
++        );
 +    }
 +
 +    #[test]
-+    fn test_unknown_alias() {
-+        let mut registry = LanAliasRegistry::new();
-+        assert!(registry.resolve("unknown").is_err());
-+    }
-+
-+    #[test]
-+    fn test_clear() {
-+        let mut registry = LanAliasRegistry::new();
-+        registry.register("alias1", "ticket1").unwrap();
-+        registry.register("alias2", "ticket2").unwrap();
-+
-+        registry.clear();
-+        assert!(registry.resolve("alias1").is_err());
-+        assert!(registry.resolve("alias2").is_err());
-+    }
-+
-+    #[test]
-+    fn test_no_collision_overwrite() {
++    fn duplicate_registration_does_not_overwrite() {
 +        let mut registry = LanAliasRegistry::new();
 +        registry.register("samealias", "ticket1").unwrap();
 +
-+        let result = registry.register("samealias", "ticket2");
-+        assert!(result.is_err());
-+
-+        let resolved = registry.resolve("samealias").unwrap();
-+        assert_eq!(resolved, "ticket1");
++        assert!(registry.register("samealias", "ticket2").is_err());
++        assert_eq!(registry.resolve("samealias").unwrap(), "ticket1");
 +    }
 +
 +    #[test]
-+    fn test_ttl_expired_is_removed() {
-+        let mut registry = LanAliasRegistry::new();
-+        let ticket = "ticket";
-+        registry.register("myalias", ticket).unwrap();
-+
-+        if let Some(entry) = registry.aliases.get_mut("myalias") {
-+            entry.registered_at =
-+                Instant::now() - Duration::from_secs(ALIAS_TTL_SECS + 1);
-+        }
-+
-+        let result = registry.resolve("myalias");
-+        assert!(result.is_err());
-+        assert!(result.unwrap_err().to_string().contains("expired"));
-+        assert!(!registry.aliases.contains_key("myalias"));
-+    }
-+
-+    #[test]
-+    fn test_expired_vs_missing_distinction() {
++    fn ttl_and_expired_are_distinct_from_missing() {
 +        let mut registry = LanAliasRegistry::new();
 +        registry.register("expired", "ticket1").unwrap();
-+        registry.register("fresh", "ticket2").unwrap();
 +
 +        if let Some(entry) = registry.aliases.get_mut("expired") {
 +            entry.registered_at =
 +                Instant::now() - Duration::from_secs(ALIAS_TTL_SECS + 1);
 +        }
 +
-+        let expired_result = registry.resolve("expired");
-+        assert!(expired_result.is_err());
-+        assert!(expired_result
-+            .unwrap_err()
-+            .to_string()
-+            .contains("expired"));
++        let expired = registry.resolve("expired").unwrap_err().to_string();
++        assert!(expired.contains("expired"));
++        assert!(!registry.aliases.contains_key("expired"));
 +
-+        let missing_result = registry.resolve("unknown");
-+        assert!(missing_result.is_err());
-+        assert!(missing_result.unwrap_err().to_string().contains("not found"));
-+
-+        let fresh_result = registry.resolve("fresh");
-+        assert!(fresh_result.is_ok());
-+        assert_eq!(fresh_result.unwrap(), "ticket2");
++        let missing = registry.resolve("missing").unwrap_err().to_string();
++        assert!(missing.contains("not found"));
 +    }
 +
 +    #[test]
-+    fn test_unique_match() {
-+        let mut registry = LanAliasRegistry::new();
-+        let ticket = "unique_ticket_123";
-+        registry.register("uniquealias", ticket).unwrap();
-+
-+        let resolved = registry.resolve("uniquealias").unwrap();
-+        assert_eq!(resolved, ticket);
-+    }
-+
-+    #[test]
-+    fn test_ambiguity_single_registry() {
-+        let mut registry = LanAliasRegistry::new();
-+        registry.register("shared", "peer1_ticket").unwrap();
-+
-+        let resolved = registry.resolve("shared").unwrap();
-+        assert_eq!(resolved, "peer1_ticket");
-+    }
-+
-+    #[test]
-+    fn test_timeout_scenario() {
-+        let mut registry = LanAliasRegistry::new();
-+        let result = registry.resolve("nonexistent");
-+        assert!(result.is_err());
-+        assert!(result.unwrap_err().to_string().contains("not found"));
-+    }
-+
-+    #[test]
-+    fn test_registry_default() {
-+        let registry = LanAliasRegistry::default();
-+        assert!(registry.aliases.is_empty());
-+    }
-+
-+    #[test]
-+    fn test_prune_expired_removes_only_stale() {
++    fn prune_expired_removes_only_stale_entries() {
 +        let mut registry = LanAliasRegistry::new();
 +        registry.register("fresh", "ticket1").unwrap();
 +        registry.register("stale", "ticket2").unwrap();
@@ -298,24 +218,33 @@ index 0000000..1111111
 +    }
 +
 +    #[test]
-+    fn test_nonce_not_in_registry() {
++    fn clear_removes_all_aliases() {
 +        let mut registry = LanAliasRegistry::new();
-+        registry.register("test", "ticket").unwrap();
++        registry.register("alias1", "ticket1").unwrap();
++        registry.register("alias2", "ticket2").unwrap();
 +
-+        let entry = registry.aliases.get("test").unwrap();
-+        assert_eq!(entry.blob_ticket, "ticket");
++        registry.clear();
++
++        assert!(registry.resolve("alias1").is_err());
++        assert!(registry.resolve("alias2").is_err());
++    }
++
++    #[test]
++    fn empty_ticket_is_rejected() {
++        let mut registry = LanAliasRegistry::new();
++        assert!(registry.register("alias1", "").is_err());
++        assert!(registry.register("alias2", "   ").is_err());
 +    }
 +}
-
 diff --git a/engine/protocol/src/control.rs b/engine/protocol/src/control.rs
 index 3333333..4444444 100644
 --- a/engine/protocol/src/control.rs
 +++ b/engine/protocol/src/control.rs
-@@ -43,6 +43,22 @@ pub enum ControlMessage {
+@@ -43,6 +43,24 @@ pub enum ControlMessage {
          session_id: String,
          #[serde(rename = "response")]
          response: InviteResponse,
-     },
++    },
 +    AliasLookupRequest {
 +        alias: String,
 +        lookup_nonce: u64,
@@ -327,16 +256,21 @@ index 3333333..4444444 100644
 +        #[serde(default, skip_serializing_if = "Option::is_none")]
 +        error_message: Option<String>,
 +        lookup_nonce: u64,
-+    },
+     },
  }
  
- impl ControlMessage {
+@@ -50,13 +68,15 @@ impl ControlMessage {
      pub fn kind(&self) -> &'static str {
          match self {
 -            Self::WhoAreYou => "WhoAreYou",
 -            Self::Identity { .. } => "Identity",
 -            Self::PairingInfo { .. } => "PairingInfo",
 -            Self::RememberVote { .. } => "RememberVote",
+-            Self::Invite { .. } => "Invite",
+-            Self::InviteResponse { .. } => "InviteResponse",
+-            Self::Recognition { .. } => "Recognition",
+-            Self::Forget { .. } => "Forget",
+-            Self::PairRequest { .. } => "PairRequest",
 +            Self::PairingInfo { .. } => "pairing-info",
 +            Self::RememberVote { .. } => "remember-vote",
 +            Self::Invite { .. } => "invite",
@@ -351,7 +285,7 @@ index 3333333..4444444 100644
          }
      }
  }
- 
++
 +#[cfg(test)]
 +mod alias_lookup_tests {
 +    use super::*;
@@ -378,13 +312,36 @@ index 3333333..4444444 100644
 +            other => panic!("expected AliasLookupRequest, got {other:?}"),
 +        }
 +    }
-+}
 +
++    #[test]
++    fn kind_matches_the_serde_tag_for_alias_messages() {
++        let messages = [
++            ControlMessage::AliasLookupRequest {
++                alias: "test".to_string(),
++                lookup_nonce: 1,
++            },
++            ControlMessage::AliasLookupResponse {
++                success: true,
++                blob_ticket: Some("ticket".to_string()),
++                error_message: None,
++                lookup_nonce: 1,
++            },
++        ];
++
++        for message in messages {
++            let value = serde_json::to_value(&message).unwrap();
++            assert_eq!(
++                value.get("kind").and_then(serde_json::Value::as_str),
++                Some(message.kind())
++            );
++        }
++    }
++}
 diff --git a/engine/protocol/src/nearby.rs b/engine/protocol/src/nearby.rs
-index 0000000..1111111 100644
+index 5555555..6666666 100644
 --- a/engine/protocol/src/nearby.rs
 +++ b/engine/protocol/src/nearby.rs
-@@ -1,6 +1,13 @@
+@@ -1,8 +1,15 @@
  pub fn unpaired_message_allowed(msg: &ControlMessage) -> bool {
      matches!(
          msg,
@@ -397,11 +354,11 @@ index 0000000..1111111 100644
  }
 +
 +#[cfg(test)]
-+mod tests {
++mod alias_lookup_policy_tests {
 +    use super::*;
 +
 +    #[test]
-+    fn alias_lookup_policy() {
++    fn alias_lookup_request_is_allowed_for_unpaired_peer() {
 +        assert!(unpaired_message_allowed(
 +            &ControlMessage::AliasLookupRequest {
 +                alias: "test-code".to_string(),
@@ -419,9 +376,8 @@ index 0000000..1111111 100644
 +        ));
 +    }
 +}
-
 diff --git a/engine/native/src/node.rs b/engine/native/src/node.rs
-index 5555555..6666666 100644
+index 7777777..8888888 100644
 --- a/engine/native/src/node.rs
 +++ b/engine/native/src/node.rs
 @@ -1,5 +1,6 @@
@@ -438,65 +394,136 @@ index 5555555..6666666 100644
 +    lan_alias_registry: Arc<Mutex<LanAliasRegistry>>,
  }
  
-@@ -570,6 +573,52 @@ impl ControlProtocol {
-+                    ControlMessage::AliasLookupRequest {
-+                        alias,
+ #[derive(Debug, Clone)]
+@@ -560,6 +563,82 @@ impl ControlProtocol {
+     async fn handle_control_session(
+         &self,
+         mut send: SendStream,
+         mut recv: RecvStream,
+         conn: Connection,
+         remote: EndpointId,
+     ) -> anyhow::Result<()> {
+         let msg = read_message(&mut recv).await?;
+ 
+         self.check_unpaired_rate_limit(&remote).await?;
+ 
++        let msg = match msg {
++            ControlMessage::AliasLookupRequest {
++                alias,
++                lookup_nonce,
++            } => {
++                if !has_direct_path(&conn).await {
++                    let response = ControlMessage::AliasLookupResponse {
++                        success: false,
++                        blob_ticket: None,
++                        error_message: Some(
++                            "Alias lookup requires a direct LAN connection".to_string(),
++                        ),
 +                        lookup_nonce,
-+                    } => {
-+                        if !has_direct_path(&conn).await {
-+                            let response = ControlMessage::AliasLookupResponse {
-+                                success: false,
-+                                blob_ticket: None,
-+                                error_message: Some(
-+                                    "Alias lookup requires a direct LAN connection"
-+                                        .to_string(),
-+                                ),
-+                                lookup_nonce,
-+                            };
++                    };
 +
-+                            let _ = write_message(&mut send, &response).await;
-+                            continue;
-+                        }
++                    let _ = write_message(&mut send, &response).await;
++                    continue;
++                }
 +
-+                        let result = self
-+                            .ctx
-+                            .lan_alias_registry
-+                            .lock()
-+                            .await
-+                            .resolve(&alias);
++                let result = self
++                    .ctx
++                    .lan_alias_registry
++                    .lock()
++                    .await
++                    .resolve(&alias);
 +
-+                        let response = match result {
-+                            Ok(blob_ticket) => ControlMessage::AliasLookupResponse {
-+                                success: true,
-+                                blob_ticket: Some(blob_ticket),
-+                                error_message: None,
-+                                lookup_nonce,
-+                            },
-+                            Err(_) => ControlMessage::AliasLookupResponse {
-+                                success: false,
-+                                blob_ticket: None,
-+                                error_message: Some("Alias not found".to_string()),
-+                                lookup_nonce,
-+                            },
-+                        };
++                let response = match result {
++                    Ok(blob_ticket) => ControlMessage::AliasLookupResponse {
++                        success: true,
++                        blob_ticket: Some(blob_ticket),
++                        error_message: None,
++                        lookup_nonce,
++                    },
++                    Err(_) => ControlMessage::AliasLookupResponse {
++                        success: false,
++                        blob_ticket: None,
++                        error_message: Some("Alias not found".to_string()),
++                        lookup_nonce,
++                    },
++                };
 +
-+                        if let Err(err) = write_message(&mut send, &response).await {
-+                            tracing::debug!(
-+                                target: "dashbeam::_events::control::alias_reply_failed",
-+                                remote = %remote.fmt_short(),
-+                                %err,
-+                            );
-+                        }
++                if let Err(err) = write_message(&mut send, &response).await {
++                    tracing::debug!(
++                        target: "dashbeam::_events::control::alias_reply_failed",
++                        remote = %remote.fmt_short(),
++                        %err,
++                    );
++                }
 +
-+                        continue;
++                continue;
++            }
++            ControlMessage::AliasLookupResponse { .. } => {
++                continue;
++            }
++            other => other,
++        };
++
+         if let ControlMessage::WhoAreYou = msg {
+             // existing code...
+         }
+ 
+         // existing code continues...
+     }
+@@ -700,6 +779,55 @@ impl NodeService {
+         match msg {
++            ControlMessage::AliasLookupRequest {
++                alias,
++                lookup_nonce,
++            } => {
++                let response = if !has_direct_path(&conn).await {
++                    ControlMessage::AliasLookupResponse {
++                        success: false,
++                        blob_ticket: None,
++                        error_message: Some(
++                            "Alias lookup requires a direct LAN connection".to_string(),
++                        ),
++                        lookup_nonce,
 +                    }
-+                    ControlMessage::AliasLookupResponse { .. } => {
-+                        continue;
++                } else {
++                    match self
++                        .ctx
++                        .lan_alias_registry
++                        .lock()
++                        .await
++                        .resolve(&alias)
++                    {
++                        Ok(blob_ticket) => ControlMessage::AliasLookupResponse {
++                            success: true,
++                            blob_ticket: Some(blob_ticket),
++                            error_message: None,
++                            lookup_nonce,
++                        },
++                        Err(_) => ControlMessage::AliasLookupResponse {
++                            success: false,
++                            blob_ticket: None,
++                            error_message: Some("Alias not found".to_string()),
++                            lookup_nonce,
++                        },
 +                    }
-                     ControlMessage::PairRequest {
-                         sender_name,
-                         device_type,
-@@ -782,6 +831,7 @@ pub struct NodeService {
++                };
++
++                if let Err(err) = write_message(&mut send, &response).await {
++                    tracing::debug!(
++                        target: "dashbeam::_events::control::alias_reply_failed",
++                        remote = %remote.fmt_short(),
++                        %err,
++                    );
++                }
++            }
++            ControlMessage::AliasLookupResponse { .. } => {
++                // A server must not process an unsolicited response.
++            }
+             ControlMessage::PairRequest {
+                 sender_name,
+                 device_type,
+                 ..
+@@ -782,6 +910,7 @@ pub struct NodeService {
      nearby: Arc<Mutex<NearbyRegistry>>,
      lan_discovery: Mutex<Option<LanDiscoveryHandle>>,
      nearby_unavailable: Arc<std::sync::RwLock<Option<String>>>,
@@ -504,14 +531,15 @@ index 5555555..6666666 100644
      unpaired_limiter: Arc<std::sync::Mutex<UnpairedRateLimiter>>,
      blocked: Arc<RwLock<HashSet<String>>>,
      pending_nearby_invites: Arc<RwLock<HashMap<String, PendingNearbyInvite>>>,
-@@ -860,6 +910,7 @@ impl NodeService {
+@@ -860,6 +989,7 @@ impl NodeService {
          let nearby = Arc::new(Mutex::new(NearbyRegistry::new()));
          let nearby_unavailable: Arc<std::sync::RwLock<Option<String>>> =
              Arc::new(std::sync::RwLock::new(None));
 +        let lan_alias_registry = Arc::new(Mutex::new(LanAliasRegistry::new()));
          let unpaired_limiter = Arc::new(std::sync::Mutex::new(UnpairedRateLimiter::new()));
  
-@@ -880,6 +931,7 @@ impl NodeService {
+         let paired_connections = Arc::new(PairedConnectionManager::new(
+@@ -880,6 +1010,7 @@ impl NodeService {
              pairing_host_persistent.clone(),
              app_handle.clone(),
              presence.clone(),
@@ -519,7 +547,7 @@ index 5555555..6666666 100644
              paired_connections.clone(),
              network_ready.clone(),
              relay_mode.clone(),
-@@ -923,6 +975,7 @@ impl NodeService {
+@@ -923,6 +1054,7 @@ impl NodeService {
              nearby,
              lan_discovery: Mutex::new(lan_discovery),
              nearby_unavailable,
@@ -527,22 +555,32 @@ index 5555555..6666666 100644
              unpaired_limiter,
              network_transition: Mutex::new(()),
              blocked,
-@@ -1350,6 +1403,121 @@ impl NodeService {
-+    pub async fn register_lan_alias(
-+        &self,
-+        alias: &str,
-+        blob_ticket: &str,
-+    ) -> anyhow::Result<()> {
-+        self.lan_alias_registry
-+            .lock()
-+            .await
-+            .register(alias, blob_ticket)
-+    }
-+
+@@ -1350,17 +1482,99 @@ impl NodeService {
+         Ok(true)
+     }
+ 
+     pub async fn register_lan_alias(
+         &self,
+         alias: &str,
+         blob_ticket: &str,
+     ) -> anyhow::Result<()> {
+         self.lan_alias_registry
+             .lock()
+             .await
+             .register(alias, blob_ticket)
+     }
+ 
+-    pub async fn clear_lan_alias(&self) -> anyhow::Result<()> {
 +    pub async fn clear_lan_alias(&self) {
-+        self.lan_alias_registry.lock().await.clear();
-+    }
-+
+         self.lan_alias_registry.lock().await.clear();
+-        Ok(())
+     }
+ 
+-    pub async fn resolve_lan_alias_internal(&self, alias: &str) -> anyhow::Result<String> {
+-        self.lan_alias_registry
+-            .lock()
+-            .await
+-            .resolve(alias)
 +    pub async fn query_lan_alias(
 +        &self,
 +        remote_endpoint_id: &str,
@@ -649,8 +687,15 @@ index 5555555..6666666 100644
 +            }
 +        }
 +    }
++
++    pub async fn list_nearby(&self) -> Vec<NearbyDevice> {
++        self.nearby.lock().await.list()
+     }
  
-@@ -1630,6 +1808,7 @@ fn build_runtime(
+     async fn deliver_pair_request(&self, remote_endpoint_id: &str) -> anyhow::Result<bool> {
+         let remote = EndpointId::from_str(remote_endpoint_id)?;
+         // existing code...
+@@ -1630,6 +1844,7 @@ fn build_runtime(
      pairing_host_persistent: Arc<AtomicBool>,
      app_handle: AppHandle,
      presence: Arc<std::sync::RwLock<HashMap<String, bool>>>,
@@ -658,7 +703,7 @@ index 5555555..6666666 100644
      paired_connections: Arc<PairedConnectionManager>,
      network_ready: Arc<AtomicBool>,
      relay_mode: RelayMode,
-@@ -1678,6 +1857,7 @@ fn build_runtime(
+@@ -1678,6 +1893,7 @@ fn build_runtime(
          pending_nearby_invites: pending_nearby_invites.clone(),
          nearby: nearby.clone(),
          unpaired_limiter: unpaired_limiter.clone(),
@@ -666,7 +711,6 @@ index 5555555..6666666 100644
      };
  
      let control_protocol = ControlProtocol { ctx };
-
 diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
 index cccccccc..dddddddd 100644
 --- a/src-tauri/Cargo.toml
@@ -679,12 +723,11 @@ index cccccccc..dddddddd 100644
  n0-watcher = "1.0"
  iroh = { version = "1.0.3", features = ["platform-verifier"] }
  iroh-blobs = { version = "0.103" }
-
 diff --git a/src-tauri/src/commands.rs b/src-tauri/src/commands.rs
 index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 --- a/src-tauri/src/commands.rs
 +++ b/src-tauri/src/commands.rs
-@@ -1831,6 +1831,157 @@ pub async fn autostart_set(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), String>
+@@ -1831,6 +1831,182 @@ pub async fn autostart_set(app_handle: tauri::AppHandle, enabled: bool) -> Resu
      crate::autostart::set(&app_handle, enabled).await
  }
  
@@ -761,9 +804,8 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +    alias: String,
 +    state: State<'_, AppStateMutex>,
 +) -> Result<AliasResolutionOutcome, String> {
-+    let normalized =
-+        engine::LanAliasRegistry::normalize_alias(&alias)
-+            .map_err(|error| error.to_string())?;
++    let normalized = engine::LanAliasRegistry::normalize_alias(&alias)
++        .map_err(|error| error.to_string())?;
 +
 +    let node = {
 +        let app_state = state.lock().await;
@@ -786,19 +828,23 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +        });
 +    }
 +
-+    let timestamp = std::time::SystemTime::now()
-+        .duration_since(std::time::UNIX_EPOCH)
-+        .map(|duration| duration.as_nanos() as u64)
-+        .unwrap_or_default();
++    let lookup_nonce = {
++        use std::time::{SystemTime, UNIX_EPOCH};
 +
-+    static NONCE_COUNTER: std::sync::atomic::AtomicU64 =
-+        std::sync::atomic::AtomicU64::new(1);
++        static NONCE_COUNTER: std::sync::atomic::AtomicU64 =
++            std::sync::atomic::AtomicU64::new(1);
 +
-+    let lookup_nonce = timestamp
-+        ^ NONCE_COUNTER.fetch_add(
-+            1,
-+            std::sync::atomic::Ordering::Relaxed,
-+        );
++        let timestamp = SystemTime::now()
++            .duration_since(UNIX_EPOCH)
++            .map(|duration| duration.as_nanos() as u64)
++            .unwrap_or_default();
++
++        timestamp
++            ^ NONCE_COUNTER.fetch_add(
++                1,
++                std::sync::atomic::Ordering::Relaxed,
++            )
++    };
 +
 +    let mut tasks = tokio::task::JoinSet::new();
 +
@@ -808,13 +854,22 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +        let endpoint_id = peer.endpoint_id;
 +
 +        tasks.spawn(async move {
-+            let result = node
-+                .query_lan_alias(
++            let result = tokio::time::timeout(
++                std::time::Duration::from_secs(5),
++                node.query_lan_alias(
 +                    &endpoint_id,
 +                    &alias,
 +                    lookup_nonce,
-+                )
-+                .await;
++                ),
++            )
++            .await;
++
++            let result = match result {
++                Ok(result) => result,
++                Err(error) => Err(anyhow::anyhow!(
++                    "alias lookup timed out: {error}"
++                )),
++            };
 +
 +            (endpoint_id, result)
 +        });
@@ -829,8 +884,14 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +        };
 +
 +        match result {
-+            Ok(Some(ticket)) => {
++            Ok(Some(ticket)) if !ticket.trim().is_empty() => {
 +                responses.insert(endpoint_id, ticket);
++            }
++            Ok(Some(_)) => {
++                tracing::debug!(
++                    target: "dashbeam::_events::control::alias_lookup_invalid_ticket",
++                    %endpoint_id,
++                );
 +            }
 +            Ok(None) => {}
 +            Err(error) => {
@@ -851,18 +912,14 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +                .next()
 +                .expect("one alias response");
 +
-+            Ok(AliasResolutionOutcome::UniqueMatch {
-+                blob_ticket,
-+            })
++            Ok(AliasResolutionOutcome::UniqueMatch { blob_ticket })
 +        }
 +        _ => {
 +            let mut endpoint_ids: Vec<_> =
 +                responses.into_keys().collect();
 +            endpoint_ids.sort();
 +
-+            Ok(AliasResolutionOutcome::Ambiguous {
-+                endpoint_ids,
-+            })
++            Ok(AliasResolutionOutcome::Ambiguous { endpoint_ids })
 +        }
 +    }
 +}
@@ -893,7 +950,10 @@ index 740f247d2949e33dd83be374672e6017c2e16492..9a1b1b1b1b1b1b1b 100644
 +) -> Result<AliasResolutionOutcome, String> {
 +    Err("LAN alias not available on this platform".to_string())
 +}
-
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
 index 00674c4ea806e1318e3b2c1c54c38560ff5477dc..22222222222222222222222 100644
 --- a/src-tauri/src/lib.rs
@@ -908,7 +968,7 @@ index 00674c4ea806e1318e3b2c1c54c38560ff5477dc..22222222222222222222222 100644
              stop_sharing,
              receive_file,
              cancel_receive,
-@@ -421,6 +424,11 @@ pub async fn stop_sharing(state: State<'_, AppStateMutex>) -> Result<(), String> {
+@@ -421,6 +424,9 @@ pub async fn stop_sharing(state: State<'_, AppStateMutex>) -> Result<(), String
              return Err(e);
          }
  
@@ -919,53 +979,58 @@ index 00674c4ea806e1318e3b2c1c54c38560ff5477dc..22222222222222222222222 100644
 +
          #[cfg(target_os = "android")]
          std::fs::remove_dir_all(&share._path);
-
+     }
 diff --git a/frontend/src/components/sender/Sender.tsx b/frontend/src/components/sender/Sender.tsx
 index 2ec592da6750bac92291c03f40e503589adb0076..3b3c3c3c3c3c3c3c 100644
 --- a/frontend/src/components/sender/Sender.tsx
 +++ b/frontend/src/components/sender/Sender.tsx
-@@ -1,4 +1,4 @@
+@@ -1,4 +1,5 @@
  import { StopCircleIcon } from 'lucide-react'
+-import { useState } from 'react'
 -import { useEffect } from 'react'
 +import { useEffect, useState } from 'react'
++import { invoke } from '@/lib/platform-api'
  import { useSender } from '../../hooks/useSender'
  import { useTranslation } from '../../i18n/react-i18next-compat'
  import { useSenderStore } from '../../store/sender-store'
-@@ -7,6 +7,7 @@ import { useSenderStore } from '../../store/sender-store'
+@@ -7,7 +8,6 @@ import { useSenderStore } from '../../store/sender-store'
+ import { TransferSuccessScreen } from '../common/TransferSuccessScreen'
  import {
      AlertDialog,
 -    AlertDialogAction,
      AlertDialogClose,
      AlertDialogContent,
      AlertDialogDescription,
-@@ -17,6 +18,16 @@ import { Button } from '../ui/button'
+@@ -17,6 +17,15 @@ import {
+ import { Button } from '../ui/button'
  import { DragDrop } from './DragDrop'
  import { ShareActionCard } from './ShareActionCard'
  import { SharingActiveCard } from './SharingActiveCard'
-+import {
-+    Dialog,
-+    DialogClose,
-+    DialogContent,
-+    DialogDescription,
-+    DialogFooter,
-+    DialogHeader,
-+    DialogTitle,
-+} from '../ui/dialog'
-+import { Input } from '../ui/input'
-+import { Label } from '../ui/label'
-+import { invoke } from '@/lib/platform-api'
+ import {
+     Dialog,
+     DialogClose,
+     DialogContent,
+     DialogDescription,
+     DialogFooter,
+     DialogHeader,
+     DialogTitle,
+ } from '../ui/dialog'
+ import { Input } from '../ui/input'
+ import { Label } from '../ui/label'
+-import { invoke } from '@tauri-apps/api/tauri'
  
  interface SenderProps {
      onTransferStateChange: (isSharing: boolean) => void
-@@ -24,6 +34,12 @@ interface SenderProps {
+@@ -24,6 +33,8 @@ interface SenderProps {
  export function Sender({ onTransferStateChange }: SenderProps) {
      const [showAliasDialog, setShowAliasDialog] = useState(false)
-+    const [lanAlias, setLanAlias] = useState('')
+     const [lanAlias, setLanAlias] = useState('')
 +    const [registeredAlias, setRegisteredAlias] = useState<string | null>(null)
-+    const [isRegisteringAlias, setIsRegisteringAlias] = useState(false)
-+    const [aliasError, setAliasError] = useState<string | null>(null)
- 
-@@ -70,6 +86,57 @@ export function Sender({ onTransferStateChange }: SenderProps) {
+     const [isRegisteringAlias, setIsRegisteringAlias] = useState(false)
+     const [aliasError, setAliasError] = useState<string | null>(null)
+     const {
+         viewState,
+@@ -70,6 +81,55 @@ export function Sender({ onTransferStateChange }: SenderProps) {
          }
      }, [viewState, isBroadcastMode, setIsBroadcastMode])
  
@@ -997,7 +1062,9 @@ index 2ec592da6750bac92291c03f40e503589adb0076..3b3c3c3c3c3c3c3c 100644
 +            return
 +        }
 +
-+        if (!validateAlias(normalized)) return
++        if (!validateAlias(normalized)) {
++            return
++        }
 +
 +        setIsRegisteringAlias(true)
 +
@@ -1010,7 +1077,9 @@ index 2ec592da6750bac92291c03f40e503589adb0076..3b3c3c3c3c3c3c3c 100644
 +            setRegisteredAlias(normalized)
 +            setShowAliasDialog(false)
 +        } catch (error) {
-+            setAliasError(`Failed to register alias: ${String(error)}`)
++            setAliasError(
++                `Failed to register alias: ${String(error)}`
++            )
 +        } finally {
 +            setIsRegisteringAlias(false)
 +        }
@@ -1032,7 +1101,9 @@ index 2ec592da6750bac92291c03f40e503589adb0076..3b3c3c3c3c3c3c3c 100644
 +
      return (
          <div className="p-0 sm:p-6 space-y-6 relative h-[65dvh] sm:h-112 overflow-y-auto flex flex-col">
-@@ -145,6 +212,79 @@ export function Sender({ onTransferStateChange }: SenderProps) {
+             {/* existing sender UI */}
+@@ -145,6 +205,20 @@ export function Sender({ onTransferStateChange }: SenderProps) {
+                 </div>
              )}
  
 +            <div className="mt-3 space-y-2">
@@ -1050,13 +1121,15 @@ index 2ec592da6750bac92291c03f40e503589adb0076..3b3c3c3c3c3c3c3c 100644
 +
 +                {registeredAlias ? (
 +                    <p className="text-center text-xs text-muted-foreground">
-+                        The receiver can enter <strong>{registeredAlias}</strong>{' '}
-+                        while connected to the same LAN or hotspot.
++                        The receiver can enter{' '}
++                        <strong>{registeredAlias}</strong> while connected
++                        to the same LAN or hotspot.
 +                    </p>
 +                ) : null}
 +            </div>
 +
-+            <Dialog
+             <Dialog
+-                open={viewState === 'SHARING'}
 +                open={showAliasDialog}
 +                onOpenChange={(open) => {
 +                    if (open) {
@@ -1105,7 +1178,10 @@ index 2ec592da6750bac92291c03f40e503589adb0076..3b3c3c3c3c3c3c3c 100644
 +                        </div>
 +
 +                        {aliasError ? (
-+                            <p role="alert" className="text-sm text-destructive">
++                            <p
++                                role="alert"
++                                className="text-sm text-destructive"
++                            >
 +                                {aliasError}
 +                            </p>
 +                        ) : null}
@@ -1143,7 +1219,6 @@ index 2ec592da6750bac92291c03f40e503589adb0076..3b3c3c3c3c3c3c3c 100644
  
              <AlertDialog open={alertDialog.isOpen} onOpenChange={closeAlert}>
                  <AlertDialogContent>
-
 diff --git a/frontend/src/components/receiver/Receiver.tsx b/frontend/src/components/receiver/Receiver.tsx
 index 14a869ded3677bde64eb35f1e72a8b62b3322fc4..5c5c5c5c5c5c5c5c 100644
 --- a/frontend/src/components/receiver/Receiver.tsx
@@ -1157,33 +1232,37 @@ index 14a869ded3677bde64eb35f1e72a8b62b3322fc4..5c5c5c5c5c5c5c5c 100644
  import { useTranslation } from '../../i18n/react-i18next-compat'
  import { PulseAnimation } from '../common/PulseAnimation'
  import { TransferSuccessScreen } from '../common/TransferSuccessScreen'
-@@ -25,6 +25,25 @@ interface ReceiverProps {
+@@ -25,6 +25,14 @@ interface ReceiverProps {
  export function Receiver({ onTransferStateChange }: ReceiverProps) {
      const [showInstructionsDialog, setShowInstructionsDialog] = useState(false)
      const [showAliasDialog, setShowAliasDialog] = useState(false)
      const [aliasInput, setAliasInput] = useState('')
      const [isResolvingAlias, setIsResolvingAlias] = useState(false)
      const [aliasError, setAliasError] = useState<string | null>(null)
+     const { t } = useTranslation()
  
 +    type AliasResolutionOutcome =
 +        | {
-+              status: 'uniqueMatch'
-+              blobTicket: string
-+          }
++            status: 'uniqueMatch'
++            blobTicket: string
++        }
 +        | {
-+              status: 'notFound'
-+          }
++            status: 'notFound'
++        }
 +        | {
-+              status: 'ambiguous'
-+              endpointIds: string[]
-+          }
++            status: 'ambiguous'
++            endpointIds: string[]
++        }
 +        | {
-+              status: 'error'
-+              message: string
-+          }
++            status: 'error'
++            message: string
++        }
 +
-@@ -50,6 +69,65 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
-     useEffect(() => {
+     const {
+         isReceiving,
+         handleTicketChange,
+         // existing context fields...
+@@ -50,6 +58,58 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
          onTransferStateChange(isReceiving)
      }, [isReceiving, onTransferStateChange])
  
@@ -1215,7 +1294,9 @@ index 14a869ded3677bde64eb35f1e72a8b62b3322fc4..5c5c5c5c5c5c5c5c 100644
 +            return
 +        }
 +
-+        if (!validateAlias(normalized)) return
++        if (!validateAlias(normalized)) {
++            return
++        }
 +
 +        setIsResolvingAlias(true)
 +
@@ -1249,7 +1330,9 @@ index 14a869ded3677bde64eb35f1e72a8b62b3322fc4..5c5c5c5c5c5c5c5c 100644
 +                    return
 +            }
 +        } catch (error) {
-+            setAliasError(`Failed to resolve alias: ${String(error)}`)
++            setAliasError(
++                `Failed to resolve alias: ${String(error)}`
++            )
 +        } finally {
 +            setIsResolvingAlias(false)
 +        }
@@ -1261,26 +1344,29 @@ index 14a869ded3677bde64eb35f1e72a8b62b3322fc4..5c5c5c5c5c5c5c5c 100644
 +        setAliasError(null)
 +    }
 +
-@@ -77,6 +153,11 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
-                     </div>
- 
-                     <div className="space-y-4 flex-1 flex flex-col">
-+                        <Button
-+                            variant="outline"
-+                            onClick={() => setShowAliasDialog(true)}
-+                            className="w-full"
-+                            disabled={isReceiving}
-+                        >
-+                            {t('common:receiver.resolveLanAlias') ||
-+                                'Receive via LAN Alias'}
-+                        </Button>
+     return (
+         <div className="p-2 sm:p-6 space-y-6 relative h-[62dvh] sm:h-112 overflow-y-auto flex flex-col">
+             {/* existing receiver UI */}
+@@ -77,6 +137,12 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
+                 <div className="space-y-4 flex-1 flex flex-col">
++                    <Button
++                        variant="outline"
++                        onClick={() => setShowAliasDialog(true)}
++                        className="w-full"
++                        disabled={isReceiving}
++                    >
++                        {t('common:receiver.resolveLanAlias') ||
++                            'Receive via LAN Alias'}
++                    </Button>
 +
-                         <ReceiveSaveLocationPicker
-                             savePath={savePath}
-                             disabled={isReceiving}
-@@ -165,6 +246,70 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
+                     <ReceiveSaveLocationPicker
+                         savePath={savePath}
+                         disabled={isReceiving}
+@@ -165,6 +231,69 @@ export function Receiver({ onTransferStateChange }: ReceiverProps) {
              </Dialog>
  
+-            {/* LAN Alias Resolution Dialog */}
+-            <Dialog open={showAliasDialog} onOpenChange={closeAliasDialog}>
 +            <Dialog
 +                open={showAliasDialog}
 +                onOpenChange={(open) => {
@@ -1291,58 +1377,75 @@ index 14a869ded3677bde64eb35f1e72a8b62b3322fc4..5c5c5c5c5c5c5c5c 100644
 +                    }
 +                }}
 +            >
-+                <DialogContent>
-+                    <DialogHeader>
-+                        <DialogTitle>Receive via LAN Alias</DialogTitle>
-+                        <DialogDescription>
-+                            Enter the alias provided by the sender. Both devices
-+                            must be on the same LAN or hotspot.
-+                        </DialogDescription>
-+                    </DialogHeader>
+                 <DialogContent>
+                     <DialogHeader>
+                         <DialogTitle>Receive via LAN Alias</DialogTitle>
+                         <DialogDescription>
+-                            Enter the alias the sender provided to discover and receive files.
++                            Enter the alias provided by the sender. Both
++                            devices must be on the same LAN or hotspot.
+                         </DialogDescription>
+                     </DialogHeader>
+-                    <div className="space-y-4">
+-                        <div>
 +
 +                    <div className="space-y-4 px-6 pb-2">
 +                        <div className="space-y-2">
-+                            <Label htmlFor="alias-resolve-input">Alias</Label>
-+                            <Input
-+                                id="alias-resolve-input"
+                             <Label htmlFor="alias-resolve-input">
+                                 Alias
+                             </Label>
+                             <Input
+                                 id="alias-resolve-input"
+-                                placeholder="e.g., mycode123"
 +                                placeholder="e.g. mycode123"
-+                                value={aliasInput}
+                                 value={aliasInput}
+-                                onChange={(e) => setAliasInput(e.target.value)}
 +                                onChange={(event) => {
 +                                    setAliasInput(event.target.value)
 +                                    setAliasError(null)
 +                                }}
-+                                onKeyDown={(event) => {
-+                                    if (event.key === 'Enter') {
-+                                        event.preventDefault()
-+                                        void handleResolveAlias()
-+                                    }
-+                                }}
-+                                disabled={isResolvingAlias}
+                                 disabled={isResolvingAlias}
 +                                autoCapitalize="none"
 +                                autoCorrect="off"
-+                                maxLength={32}
-+                            />
-+                        </div>
+                                 maxLength={32}
+                                 onKeyDown={(e) => {
+                                     if (e.key === 'Enter') {
+-                                        handleResolveAlias()
++                                        e.preventDefault()
++                                        void handleResolveAlias()
+                                     }
+                                 }}
+                             />
+                         </div>
+-                        {aliasError && (
+-                            <p className="text-sm text-red-500">{aliasError}</p>
+-                        )}
 +
 +                        {aliasError ? (
-+                            <p role="alert" className="text-sm text-destructive">
++                            <p
++                                role="alert"
++                                className="text-sm text-destructive"
++                            >
 +                                {aliasError}
 +                            </p>
 +                        ) : null}
-+                    </div>
+                     </div>
 +
-+                    <DialogFooter>
-+                        <DialogClose
-+                            render={
+                     <DialogFooter>
+                         <DialogClose
+                             render={
+-                                <Button variant="secondary" onClick={closeAliasDialog}>
 +                                <Button
 +                                    type="button"
 +                                    variant="secondary"
 +                                    onClick={closeAliasDialog}
 +                                >
-+                                    {t('common:cancel')}
-+                                </Button>
-+                            }
-+                        />
+                                     {t('common:cancel')}
+                                 </Button>
+                             }
+                         />
+-                        <Button onClick={handleResolveAlias} disabled={isResolvingAlias || !aliasInput.trim()}>
+-                            {isResolvingAlias ? 'Discovering...' : 'Resolve & Receive'}
 +
 +                        <Button
 +                            type="button"
@@ -1351,11 +1454,35 @@ index 14a869ded3677bde64eb35f1e72a8b62b3322fc4..5c5c5c5c5c5c5c5c 100644
 +                                isResolvingAlias || !aliasInput.trim()
 +                            }
 +                        >
-+                            {isResolvingAlias ? 'Discovering…' : 'Use alias'}
-+                        </Button>
-+                    </DialogFooter>
-+                </DialogContent>
-+            </Dialog>
++                            {isResolvingAlias
++                                ? 'Discovering…'
++                                : 'Use alias'}
+                         </Button>
+                     </DialogFooter>
+                 </DialogContent>
+             </Dialog>
          </div>
      )
  }
+ 
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index aaaaaaa..bbbbbbb 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -1,5 +1,10 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android">
++    <uses-permission android:name="android.permission.INTERNET" />
++    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
++    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
++    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
++
+     <!-- existing manifest content remains unchanged -->
+ </manifest>
+ 
+CHECK / TEST / BUILD:
+
+cargo fmt --all --check
+cargo test --manifest-path engine/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml
+pnpm lint
+pnpm build
